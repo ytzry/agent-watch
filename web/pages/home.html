@@ -1,0 +1,414 @@
+<template page>
+  <style>
+    :host { display: block; height: 100%; overflow: hidden; }
+    .page {
+      padding: 0 1rem;
+      max-width: 100%;
+      margin: 0 auto;
+      /* 布局：header 固定 + 列表区滚动 */
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    @media (min-width: 720px) {
+      .page { max-width: 720px; padding: 0 1.5rem; }
+    }
+    /* 会话列表区：唯一可滚动区域 */
+    .list-area {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 1rem;
+      overscroll-behavior: contain;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 0;
+      position: relative;
+      background: hsl(var(--background) / 0.92);
+      backdrop-filter: blur(8px);
+      padding: 0.7rem 0;
+      z-index: 10;
+      border-bottom: 1px solid hsl(var(--border));
+      flex-shrink: 0;
+      /* 窄屏换行，保证右侧按钮（横屏/设置）始终可见 */
+      flex-wrap: wrap;
+    }
+    /* 左侧：计数概览（移除标题，计数放大） */
+    .counts {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      color: hsl(var(--muted-foreground));
+      flex: 1;
+      flex-shrink: 1;
+      min-width: 0;
+    }
+    .counts .count-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+    .counts .count-item .aw-ic {
+      width: 22px;
+      height: 22px;
+      color: hsl(var(--muted-foreground));
+    }
+    .counts .count-item.wait .aw-ic {
+      color: hsl(var(--warning));
+    }
+    .counts .count-item .num {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: hsl(var(--foreground));
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .counts .count-item.wait .num {
+      color: hsl(var(--warning));
+    }
+    /* 右侧：状态点 + 按钮 */
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: hsl(var(--destructive));
+      flex-shrink: 0;
+    }
+    .status-dot.on {
+      background: hsl(var(--success));
+    }
+    .counts .wait { color: hsl(35 92% 65%); }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: hsl(var(--destructive));
+      flex-shrink: 0;
+    }
+    .status-dot.on { background: hsl(var(--success)); }
+    .group { margin-bottom: 1.1rem; }
+    .group-title {
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: hsl(var(--muted-foreground));
+      margin-bottom: 0.55rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .group-title .bar {
+      width: 3px;
+      height: 14px;
+      background: hsl(var(--primary));
+      border-radius: 2px;
+    }
+    .group-title .count {
+      font-weight: 400;
+      font-size: 0.7rem;
+      color: hsl(var(--muted-foreground) / 0.7);
+      margin-left: auto;
+    }
+    .cards { display: flex; flex-direction: column; gap: 10px; }
+    .empty {
+      text-align: center;
+      color: hsl(var(--muted-foreground));
+      padding: 3rem 1rem;
+      font-size: 0.9rem;
+    }
+    .empty .sub {
+      font-size: 0.78rem;
+      margin-top: 8px;
+      color: hsl(var(--muted-foreground) / 0.6);
+    }
+    a.settings-link {
+      color: hsl(var(--muted-foreground));
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius);
+      border: 1px solid hsl(var(--border));
+      background: transparent;
+      transition: background 0.15s, color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      flex-shrink: 0;
+    }
+    a.settings-link:active { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
+    a.settings-link .aw-ic { width: 18px; height: 18px; }
+    a.rotate-link {
+      color: hsl(var(--muted-foreground));
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius);
+      border: 1px solid hsl(var(--border));
+      background: transparent;
+      transition: background 0.15s, color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      flex-shrink: 0;
+    }
+    a.rotate-link:active { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
+    a.rotate-link .aw-ic { width: 18px; height: 18px; }
+
+    /* ===== 横屏适配 ===== */
+    /* 1) 真横屏（手机横放）：卡片更紧凑，充分利用宽度（列表保持单列） */
+    @media (orientation: landscape) {
+      .header { padding: 0.4rem 0; margin-bottom: 0.6rem; }
+      .counts { gap: 14px; }
+      .group { margin-bottom: 0.8rem; }
+    }
+    /* 2) 强制横屏（竖持手机点按钮）：宿主固定 + 旋转 90°，位置由 JS 精确设置（居中无截断） */
+    :host([data-force-landscape]) {
+      position: fixed;
+      margin: 0;
+      transform: rotate(90deg);
+      transform-origin: top left;
+      display: block;
+      overflow: hidden;
+    }
+    :host([data-force-landscape]) .page {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+    }
+    /* 强制横屏时保持单列布局（不依赖 orientation media query，因为物理还是竖屏） */
+    :host([data-force-landscape]) .header {
+      padding: 0.4rem 0;
+      margin-bottom: 0.6rem;
+      position: relative;   /* 横屏时不 sticky（宿主已 fixed），保证可见 */
+      flex-shrink: 0;
+      flex-wrap: nowrap;    /* 横屏宽够，不换行 */
+    }
+    :host([data-force-landscape]) .counts {
+      gap: 10px;
+    }
+    :host([data-force-landscape]) .counts .count-item .aw-ic {
+      width: 18px;
+      height: 18px;
+    }
+    :host([data-force-landscape]) .counts .count-item .num {
+      font-size: 0.95rem;
+    }
+    :host([data-force-landscape]) .group {
+      margin-bottom: 0.8rem;
+    }
+    /* ===== 自定义滚动条（shadcn 风格：细、圆角、hover 变亮） ===== */
+    .list-area::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .list-area::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .list-area::-webkit-scrollbar-thumb {
+      background: hsl(var(--border));
+      border-radius: 9999px;
+    }
+    .list-area::-webkit-scrollbar-thumb:hover {
+      background: hsl(var(--muted-foreground) / 0.5);
+    }
+    .list-area {
+      scrollbar-width: thin;           /* Firefox */
+      scrollbar-color: hsl(var(--border)) transparent;
+    }
+  </style>
+
+  <div class="page">
+    <div class="header">
+      <div class="counts">
+        <span class="count-item wait"><i class="aw-ic" data-lucide="bell"></i><span class="num">{{waitCount}}</span></span>
+        <span class="count-item"><i class="aw-ic" data-lucide="loader-circle"></i><span class="num">{{runningCount}}</span></span>
+        <span class="count-item"><i class="aw-ic" data-lucide="check"></i><span class="num">{{idleCount}}</span></span>
+      </div>
+      <div class="header-right">
+        <div class="status-dot" class:on="connected"></div>
+        <a class="rotate-link" href="javascript:void(0)" on:click="$host.toggleLandscape()" aria-label="切换横屏">
+          <i class="aw-ic" attr:data-lucide="rotateIcon"></i>
+        </a>
+        <a class="settings-link" href="./settings.html" olink aria-label="设置">
+          <i class="aw-ic" data-lucide="settings"></i>
+        </a>
+      </div>
+    </div>
+
+    <div class="list-area">
+      <o-if :value="!groups.length">
+        <div class="empty">
+          <div>暂无任务</div>
+          <div class="sub">等待 agent 会话事件接入…</div>
+        </div>
+      </o-if>
+
+      <o-fill :value="groups" fill-key="project">
+        <div class="group">
+          <div class="group-title">
+            <span class="bar"></span>
+            <span>{{$data.project}}</span>
+            <span class="count">{{$data.sessions.length}}</span>
+          </div>
+          <div class="cards">
+            <o-fill :value="$data.sessions" fill-key="id">
+              <task-card :session="$data"></task-card>
+            </o-fill>
+          </div>
+        </div>
+      </o-fill>
+    </div>
+  </div>
+
+  <script>
+    export default async ({ load }) => {
+      await load('../components/task-card.html');
+      const { connect, getSnapshot, subscribe } = await load('../lib/ws-client.js');
+      const { notifyState } = await load('../lib/sound.js');
+      const { createIcons } = await load('../lib/icons.js');
+      return {
+        data: {
+          groups: [],
+          counts: {},
+          waitCount: 0,
+          runningCount: 0,
+          idleCount: 0,
+          connected: false,
+          rotateIcon: 'rotate-cw',
+        },
+        attached() {
+          // 全局点击委托：document 级监听（shadow 内点击会冒泡到 document，用坐标判断目标）
+          this._landscapeHandler = (e) => {
+            const host = document.querySelector('o-page');
+            if (!host || !host.shadowRoot) return;
+            const link = host.shadowRoot.querySelector('.rotate-link');
+            if (!link) return;
+            const rect = link.getBoundingClientRect();
+            if (e.clientX >= rect.left && e.clientX <= rect.right &&
+                e.clientY >= rect.top && e.clientY <= rect.bottom) {
+              e.preventDefault();
+              this.toggleLandscape();
+            }
+          };
+          document.addEventListener('click', this._landscapeHandler);
+          // 锁定宿主高度 = 视口高（保证 header 固定 + 列表区滚动，不随内容撑开）
+          // 横屏状态下由 CSS :host([data-force-landscape]) 管理 fixed + 旋转，这里不干预
+          const fixHeight = () => {
+            const h = document.querySelector('o-page');
+            if (!h) return;
+            if (h.hasAttribute('data-force-landscape')) return;
+            h.style.height = window.innerHeight + 'px';
+            h.style.position = '';
+            h.style.width = '';
+          };
+          fixHeight();
+          setTimeout(fixHeight, 200);
+          window.addEventListener('resize', fixHeight);
+          this._fixHeight = fixHeight;
+          this.unsub = subscribe((msg) => {
+            if (msg.type === 'snapshot') {
+              this.applySnapshot(msg.data);
+            } else if (msg.type === 'state_change') {
+              // 声音播报：进入某状态时按设置播放
+              notifyState(msg.session.state);
+              this.applySnapshot(getSnapshot());
+            } else if (msg.type === 'updated' || msg.type === 'session_update') {
+              this.applySnapshot(getSnapshot());
+            } else if (msg.type === 'connected') {
+              this.connected = true;
+            } else if (msg.type === 'disconnected') {
+              this.connected = false;
+            }
+          });
+          connect();
+          this.applySnapshot(getSnapshot());
+        },
+        detached() {
+          if (this.unsub) this.unsub();
+          if (this._fixHeight) window.removeEventListener('resize', this._fixHeight);
+          if (this._landscapeHandler) document.removeEventListener('click', this._landscapeHandler);
+        },
+        ready() {
+          // 深度扫描（含 shadow DOM）替换 data-lucide 占位；延时兜底确保渲染完成
+          try {
+            createIcons();
+            setTimeout(() => createIcons(), 300);
+            setTimeout(() => createIcons(), 1000);
+          } catch {}
+        },
+        proto: {
+          applySnapshot(snap) {
+            if (!snap) return;
+            this.groups = snap.groups || [];
+            this.counts = snap.counts || {};
+            // 注意：connected 由 ws-client 的 connected/disconnected 事件维护，快照无此字段，不要覆盖
+            // 预计算计数（避免模板复杂表达式求值问题）
+            const c = this.counts;
+            this.waitCount = (c.awaiting_approval || 0) + (c.waiting_input || 0);
+            this.runningCount = c.running || 0;
+            this.idleCount = c.idle || 0;
+          },
+          /** 强制横屏切换（竖持手机 → 旋转 90° 横屏浏览；旋转由 CSS :host 处理） */
+          toggleLandscape() {
+            const host = document.querySelector('o-page');
+            if (!host) return;
+            const forced = host.hasAttribute('data-force-landscape');
+            const vw = window.innerWidth, vh = window.innerHeight;
+            if (forced) {
+              host.removeAttribute('data-force-landscape');
+              document.body.style.overflow = '';
+              this.rotateIcon = 'rotate-cw';
+              // 恢复竖屏：清除旋转定位和尺寸
+              host.style.left = '';
+              host.style.top = '';
+              host.style.width = '';
+              host.style.height = vh + 'px';
+              const page = host.shadowRoot?.querySelector('.page');
+              if (page) { page.style.width = ''; page.style.height = ''; }
+            } else {
+              host.setAttribute('data-force-landscape', '');
+              document.body.style.overflow = 'hidden';
+              this.rotateIcon = 'rotate-ccw';
+              // JS 显式设置布局尺寸 + 位置：宿主宽=视口高、高=视口宽；
+              // transform-origin: top left + rotate(90deg) 后，视觉位置 = [left-高, left] × [top, top+宽]
+              // 要居中：left = 视口宽（375），top = 0
+              host.style.width = vh + 'px';
+              host.style.height = vw + 'px';
+              host.style.left = vw + 'px';
+              host.style.top = '0px';
+              const page = host.shadowRoot?.querySelector('.page');
+              if (page) {
+                page.style.width = vh + 'px';
+                page.style.height = vw + 'px';
+              }
+            }
+            // 重新渲染图标（attr:data-lucide 变化后需替换 SVG）
+            try {
+              createIcons();
+              setTimeout(() => createIcons(), 200);
+            } catch {}
+          },
+        },
+      };
+    };
+  </script>
+</template>

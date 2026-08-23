@@ -1,0 +1,128 @@
+<template component>
+  <style>
+    :host {
+      display: inline-block;
+    }
+    /* shadcn select-trigger 视觉：触发按钮 + chevron */
+    .trigger {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 36px;
+      padding: 0 0.7rem;
+      border-radius: var(--radius);
+      border: 1px solid hsl(var(--input));
+      background: hsl(var(--input));
+      color: hsl(var(--foreground));
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: border-color 0.15s, background 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      min-width: 90px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .trigger:hover {
+      background: hsl(var(--input) / 0.85);
+    }
+    .trigger:focus-within {
+      outline: none;
+      border-color: hsl(var(--ring));
+      box-shadow: 0 0 0 2px hsl(var(--ring) / 0.3);
+    }
+    .chevron {
+      width: 16px;
+      height: 16px;
+      color: hsl(var(--muted-foreground));
+      flex-shrink: 0;
+      pointer-events: none;
+    }
+    .wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      width: 100%;
+    }
+    /* 透明原生 select 覆盖（接收点击/键盘，视觉由 trigger 呈现） */
+    .native {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+  </style>
+
+  <div class="wrap">
+    <button class="trigger" tabindex="-1" aria-hidden="true">
+      <span>{{selectedLabel}}</span>
+      <span class="chevron"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+    </button>
+    <select class="native" attr:name="name" on:change="onNativeChange">
+      <o-fill :value="optionList">
+        <option attr:value="$data.value" attr:selected="$data.value === $host.value">{{$data.label}}</option>
+      </o-fill>
+    </select>
+  </div>
+
+  <script>
+    export default async () => {
+      return {
+        tag: 'aw-select',
+        attrs: {
+          name: '',
+          value: '',
+          // options 字符串："beep:哔哔,ding:叮,chime:风铃"
+          options: '',
+        },
+        data: {
+          selectedLabel: '',
+          optionList: [],
+        },
+        ready() {
+          this.parseOptions();
+          this.updateLabel();
+        },
+        watch: {
+          value() {
+            this.updateLabel();
+          },
+          options() {
+            this.parseOptions();
+            this.updateLabel();
+          },
+        },
+        proto: {
+          parseOptions() {
+            const raw = this.options || '';
+            this.optionList = raw
+              .split(',')
+              .filter(Boolean)
+              .map((pair) => {
+                const [value, label] = pair.split(':');
+                return { value, label: label || value };
+              });
+          },
+          updateLabel() {
+            const opt = this.optionList.find((o) => o.value === this.value);
+            this.selectedLabel = opt ? opt.label : '';
+          },
+          onNativeChange(e) {
+            this.value = e.target.value;
+            this.updateLabel();
+            // ofa emit 第二参是选项对象，数据放 data 里
+            this.emit('change', { data: { value: this.value }, bubbles: true, composed: true });
+          },
+        },
+      };
+    };
+  </script>
+</template>

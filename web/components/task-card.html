@@ -1,0 +1,372 @@
+<template component>
+  <style>
+    :host {
+      display: block;
+    }
+    /* ===== 平台品牌色（卡片主色调） ===== */
+    :host([data-provider='claude-code']) {
+      --brand: 25 95% 53%;        /* Claude 橙 #D97757 */
+      --brand-soft: 25 95% 53%;
+    }
+    :host([data-provider='codex']) {
+      --brand: 160 84% 39%;       /* OpenAI 青绿 #10A37F */
+      --brand-soft: 160 84% 39%;
+    }
+    :host([data-provider='zcode']) {
+      --brand: 212 92% 63%;       /* ZCode 蓝 #58A6FF */
+      --brand-soft: 212 92% 63%;
+    }
+    :host {
+      display: block;
+    }
+    .card {
+      position: relative;
+      overflow: hidden;
+      background: hsl(var(--card));
+      border: 1px solid hsl(var(--brand) / 0.45);
+      border-radius: var(--radius-lg);
+      padding: 14px;
+      display: flex;
+      gap: 12px;
+      box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+      width: 100%;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .card:hover {
+      border-color: hsl(var(--brand) / 0.75);
+      box-shadow: 0 0 0 1px hsl(var(--brand) / 0.2), 0 4px 16px rgb(0 0 0 / 0.15);
+    }
+    /* ===== 半透明 logo 背景水印（右上角装饰，卡片高度动态也不受影响） ===== */
+    .bg-logo {
+      position: absolute;
+      right: -16px;
+      top: -16px;
+      width: 120px;
+      height: 120px;
+      opacity: 0.09;
+      pointer-events: none;
+      color: hsl(var(--brand));
+      z-index: 0;
+    }
+    .bg-logo svg {
+      width: 100%;
+      height: 100%;
+      fill: currentColor;
+    }
+    .bg-logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    /* 内容层在背景之上 */
+    .main {
+      position: relative;
+      z-index: 1;
+    }
+    /* 水印 logo 染色（simple-icons SVG 单色 → 品牌色） */
+    .bg-logo img {
+      filter: none;
+    }
+    .main {
+      flex: 1;
+      min-width: 0;
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .title {
+      font-weight: 600;
+      font-size: 0.92rem;
+      color: hsl(var(--card-foreground));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+      line-height: 1.35;
+    }
+    .mode {
+      font-size: 0.72rem;
+      color: hsl(var(--muted-foreground));
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius-sm);
+      padding: 1px 7px;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: hsl(var(--brand) / 0.06);
+      border-color: hsl(var(--brand) / 0.25);
+      color: hsl(var(--brand));
+    }
+    .meta {
+      font-size: 0.74rem;
+      color: hsl(var(--muted-foreground));
+      margin-top: 5px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .meta .aw-ic {
+      width: 13px;
+      height: 13px;
+      vertical-align: -2px;
+    }
+    .msg {
+      font-size: 0.8rem;
+      color: hsl(var(--muted-foreground));
+      margin-top: 7px;
+      line-height: 1.45;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .todos {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .todo {
+      font-size: 0.78rem;
+      color: hsl(var(--muted-foreground));
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .todo .dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 1.5px solid hsl(var(--border));
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .todo .dot .aw-ic {
+      width: 10px;
+      height: 10px;
+      color: hsl(var(--brand));
+    }
+    .todo.done .dot {
+      background: hsl(var(--brand) / 0.15);
+      border-color: hsl(var(--brand));
+    }
+    .todo.done .text {
+      text-decoration: line-through;
+      color: hsl(var(--muted-foreground) / 0.6);
+    }
+    .usage {
+      margin-top: 9px;
+      height: 6px;
+      background: hsl(var(--input));
+      border-radius: 9999px;
+      overflow: hidden;
+    }
+    .usage-bar {
+      height: 100%;
+      background: hsl(var(--brand));
+      border-radius: 9999px;
+      transition: width 0.4s;
+    }
+    .usage-text {
+      font-size: 0.7rem;
+      color: hsl(var(--muted-foreground));
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .usage-text .aw-ic {
+      width: 12px;
+      height: 12px;
+      color: hsl(var(--brand));
+    }
+    .time {
+      font-size: 0.7rem;
+      color: hsl(var(--muted-foreground) / 0.7);
+      margin-top: 7px;
+      text-align: right;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+    }
+    .time .aw-ic {
+      width: 12px;
+      height: 12px;
+    }
+    .hidden {
+      display: none !important;
+    }
+    /* ===== 状态徽章（统一中性底色，状态用文字色区分；不改变卡片背景观感） ===== */
+    .aw-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border-radius: 9999px;
+      border: 1px solid hsl(var(--border));
+      padding: 0.18rem 0.6rem;
+      font-size: 0.72rem;
+      font-weight: 500;
+      line-height: 1.4;
+      white-space: nowrap;
+      background: hsl(var(--secondary));
+    }
+    /* 状态语义色（仅文字 + 前置小圆点，背景统一） */
+    .aw-badge::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.9;
+      flex-shrink: 0;
+    }
+    .aw-badge.state-running { color: hsl(var(--info)); }
+    .aw-badge.state-awaiting_approval { color: hsl(var(--warning)); }
+    .aw-badge.state-waiting_input { color: hsl(35 92% 65%); }
+    .aw-badge.state-idle { color: hsl(var(--success)); }
+    .aw-badge.state-background_task { color: hsl(var(--muted-foreground)); }
+    .aw-badge.state-compacting { color: hsl(var(--muted-foreground)); }
+    .aw-badge.state-error { color: hsl(0 84% 70%); }
+    .aw-badge.state-ended { color: hsl(var(--muted-foreground)); }
+  </style>
+
+  <div class="card">
+    <!-- 半透明品牌 logo 背景水印（右侧） -->
+    <div class="bg-logo">
+      <img attr:src="logoUrl" alt="" />
+    </div>
+    <div class="main">
+      <div class="top">
+        <span class="title">{{title}}</span>
+        <span attr:class="badgeClass">{{stateLabel}}</span>
+        <span class="mode" class:hidden="!modeLabel">{{modeLabel}}</span>
+      </div>
+      <div class="meta">
+        <span>{{providerLabel}}</span>
+        <span class:hidden="!lastTool"><i class="aw-ic" data-lucide="wrench"></i>{{lastTool}}</span>
+        <span class:hidden="!subagentCount"><i class="aw-ic" data-lucide="git-branch"></i>×{{subagentCount}}</span>
+      </div>
+      <div class="msg" class:hidden="!lastMessage">{{lastMessage}}</div>
+      <div class="todos" class:hidden="!todo.length">
+        <o-fill :value="todo">
+          <div class="todo" class:done="$data.status === 'completed' || $data.status === 'done'">
+            <span class="dot"><i class="aw-ic" data-lucide="check"></i></span>
+            <span class="text">{{$data.content || $data.description}}</span>
+          </div>
+        </o-fill>
+      </div>
+      <div class="usage" class:hidden="!hasUsage">
+        <div class="usage-bar" :style.width="usage.pct + '%'"></div>
+      </div>
+      <div class="usage-text" class:hidden="!hasUsage">
+        <i class="aw-ic" data-lucide="gauge"></i>{{usage.contextTokens || usage.totalTokens}} / {{usage.maxTokens}} ({{usage.pct}}%)
+      </div>
+      <div class="time">
+        <i class="aw-ic" data-lucide="clock"></i>{{timeLabel}}
+      </div>
+    </div>
+  </div>
+
+  <script>
+    export default async () => {
+      const PROVIDER_LABELS = {
+        'claude-code': 'Claude Code',
+        codex: 'Codex',
+        zcode: 'ZCode',
+      };
+      const STATE_LABELS = {
+        created: '新建',
+        running: '执行中',
+        awaiting_approval: '等待审批',
+        waiting_input: '等待回复',
+        idle: '已完成',
+        background_task: '后台任务',
+        compacting: '压缩中',
+        error: '错误',
+        ended: '已结束',
+      };
+      const MODE_LABELS = {
+        ask: '询问',
+        auto: '自动',
+        plan: '计划',
+        acceptEdits: '接受编辑',
+        bypass: '完全访问',
+      };
+      return {
+        tag: 'task-card',
+        attrs: { session: '{}' },
+        data: {
+          title: '',
+          badgeClass: 'aw-badge',
+          state: '',
+          stateLabel: '',
+          modeLabel: '',
+          providerLabel: '',
+          logoUrl: '',
+          lastTool: '',
+          lastMessage: '',
+          todo: [],
+          usage: null,
+          hasUsage: false,
+          subagentCount: 0,
+          timeLabel: '',
+        },
+        ready() {
+          this.applySession();
+        },
+        watch: {
+          session() {
+            this.applySession();
+          },
+        },
+        proto: {
+          formatTime(ts) {
+            if (!ts) return '';
+            const d = new Date(ts);
+            const now = new Date();
+            const diff = Math.floor((now - d) / 1000);
+            if (diff < 60) return '刚刚';
+            if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+            if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+            return d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          },
+          applySession() {
+            // session 作为属性传入是 JSON 字符串（HTML attribute），解析为对象
+            let s = this.session;
+            if (typeof s === 'string') {
+              try { s = JSON.parse(s); } catch { s = {}; }
+            }
+            s = s || {};
+            this.title = s.title || s.cwd || '（无标题）';
+            this.badgeClass = 'aw-badge state-' + (s.state || '');
+            this.state = s.state || '';
+            this.stateLabel = STATE_LABELS[s.state] || s.state || '';
+            this.modeLabel = MODE_LABELS[s.mode] || (s.mode ? String(s.mode) : '');
+            this.providerLabel = PROVIDER_LABELS[s.provider] || s.provider || '';
+            // 统一用 SVG logo（内容占满画布，可染色：claude/codex 单色品牌 logo，zcode 品牌色方块+白Z）
+            this.logoUrl = '/assets/logos/' + (s.provider || 'zcode') + '.svg';
+            this.lastTool = s.lastTool || '';
+            this.lastMessage = s.lastMessage || '';
+            this.todo = s.todo || [];
+            this.usage = s.usage || {};
+            this.hasUsage = !!(s.usage && s.usage.pct != null);
+            this.subagentCount = (s.subagents || []).length;
+            this.timeLabel = this.formatTime(s.updatedAt);
+            // 平台品牌色 → 宿主属性（CSS 变量）
+            if (this.ele) this.ele.setAttribute('data-provider', s.provider || 'zcode');
+          },
+        },
+      };
+    };
+  </script>
+</template>

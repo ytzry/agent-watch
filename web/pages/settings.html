@@ -1,0 +1,382 @@
+<template page>
+  <style>
+    :host {
+      display: block;
+      padding: 1rem;
+      max-width: 100%;
+      margin: 0 auto;
+      box-sizing: border-box;
+      /* 内容在 :host（o-page，高 100% 由 o-app slotted 保证）内滚动 */
+      height: 100%;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    @media (min-width: 640px) {
+      :host {
+        max-width: 640px;
+        padding: 1.25rem 1.5rem;
+      }
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 0.9rem;
+      position: sticky;
+      top: 0;
+      background: hsl(var(--background) / 0.92);
+      backdrop-filter: blur(8px);
+      padding: 0.6rem 0;
+      z-index: 10;
+      border-bottom: 1px solid hsl(var(--border));
+    }
+    .header h1 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin: 0;
+      color: hsl(var(--foreground));
+      flex: 1;
+      white-space: nowrap;
+    }
+    .header a {
+      color: hsl(var(--muted-foreground));
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 36px;
+      padding: 0 0.8rem;
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+      font-size: 0.82rem;
+      flex-shrink: 0;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.15s, color 0.15s;
+    }
+    .header a:active {
+      background: hsl(var(--secondary));
+      color: hsl(var(--foreground));
+    }
+    .header a .aw-ic {
+      width: 16px;
+      height: 16px;
+    }
+    .row {
+      background: hsl(var(--card));
+      border: 1px solid hsl(var(--card-border));
+      border-radius: var(--radius-lg);
+      padding: 14px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    }
+    .row .label {
+      flex: 1;
+      min-width: 140px;
+    }
+    .row .label .name {
+      font-size: 0.9rem;
+      color: hsl(var(--card-foreground));
+      font-weight: 600;
+    }
+    .row .label .desc {
+      font-size: 0.74rem;
+      color: hsl(var(--muted-foreground));
+      margin-top: 2px;
+    }
+    .master {
+      background: hsl(var(--secondary) / 0.5);
+    }
+    .master .aw-ic {
+      width: 18px;
+      height: 18px;
+      color: hsl(var(--muted-foreground));
+      flex-shrink: 0;
+    }
+
+    /* ===== shadcn 组件样式（shadow DOM 内，不依赖全局 theme.css） ===== */
+    .aw-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      font-size: 0.82rem;
+      font-weight: 500;
+      line-height: 1.4;
+      padding: 0.45rem 0.9rem;
+      min-height: 36px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      white-space: nowrap;
+      font-family: inherit;
+    }
+    .aw-btn:active { opacity: 0.9; }
+    .aw-btn:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.5);
+    }
+    .aw-btn .aw-ic { width: 15px; height: 15px; }
+    .aw-btn-secondary {
+      background: hsl(var(--secondary));
+      color: hsl(var(--secondary-foreground));
+      border-color: hsl(var(--border));
+    }
+    .aw-btn-secondary:hover { background: hsl(var(--secondary) / 0.8); }
+
+    /* Switch（shadcn switch 组件，滑块垂直居中） */
+    .aw-switch {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      width: 44px;
+      height: 24px;
+      border-radius: 9999px;
+      border: 1px solid transparent;
+      background: hsl(var(--input));
+      cursor: pointer;
+      transition: background 0.2s;
+      flex-shrink: 0;
+      -webkit-tap-highlight-color: transparent;
+      align-self: center;
+      box-sizing: border-box;
+      vertical-align: middle;
+    }
+    .aw-switch.on { background: hsl(var(--primary)); }
+    .aw-switch::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: hsl(0 0% 100%);
+      box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+      transition: transform 0.2s;
+      transform: translateY(-50%);
+    }
+    .aw-switch.on::after { transform: translateY(-50%) translateX(20px); }
+
+    /* Select（shadcn select 风格） */
+    /* Select（shadcn select 风格：trigger 样式 + ChevronDown 图标，箭头用 wrap ::after 画） */
+    .select-wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    /* ChevronDown 图标（shadcn: size-4 opacity-50 text-muted-foreground） */
+    .select-wrap::after {
+      content: '';
+      position: absolute;
+      right: 0.65rem;
+      top: 50%;
+      width: 6px;
+      height: 6px;
+      border-right: 1.5px solid hsl(var(--muted-foreground));
+      border-bottom: 1.5px solid hsl(var(--muted-foreground));
+      opacity: 0.5;
+      transform: translateY(-70%) rotate(45deg);
+      pointer-events: none;
+    }
+    /* Trigger 视觉（shadcn: h-9 px-3 rounded-md border-input bg-transparent，隐藏原生箭头） */
+    .aw-select {
+      background-color: hsl(var(--input) / 0.3);
+      color: hsl(var(--foreground));
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+      padding: 0 1.75rem 0 0.75rem;
+      font-size: 0.82rem;
+      height: 36px;
+      line-height: 36px;
+      align-self: center;
+      box-sizing: border-box;
+      vertical-align: middle;
+      width: 100%;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .aw-select:focus-visible {
+      outline: none;
+      border-color: hsl(var(--ring));
+      box-shadow: 0 0 0 3px hsl(var(--ring) / 0.5);
+    }
+
+    /* Slider */
+    .aw-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 110px;
+      height: 20px;
+      background: transparent;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .aw-slider:focus { outline: none; }
+    .aw-slider::-webkit-slider-runnable-track {
+      height: 6px;
+      border-radius: 9999px;
+      background: hsl(var(--input));
+    }
+    .aw-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: hsl(var(--primary));
+      border: 2px solid hsl(var(--primary-foreground));
+      margin-top: -5px;
+      box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+    }
+    .aw-slider::-moz-range-track {
+      height: 6px;
+      border-radius: 9999px;
+      background: hsl(var(--input));
+    }
+    .aw-slider::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: hsl(var(--primary));
+      border: 2px solid hsl(var(--primary-foreground));
+    }
+    /* ===== 自定义滚动条（shadcn 风格） ===== */
+    :host::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    :host::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    :host::-webkit-scrollbar-thumb {
+      background: hsl(var(--border));
+      border-radius: 9999px;
+    }
+    :host::-webkit-scrollbar-thumb:hover {
+      background: hsl(var(--muted-foreground) / 0.5);
+    }
+    :host {
+      scrollbar-width: thin;           /* Firefox */
+      scrollbar-color: hsl(var(--border)) transparent;
+    }
+  </style>
+
+  <div class="header">
+    <h1>声音播报设置</h1>
+    <a href="./home.html" olink>
+      <i class="aw-ic" data-lucide="arrow-left"></i>返回
+    </a>
+  </div>
+
+  <div class="row master">
+    <i class="aw-ic" data-lucide="volume-2"></i>
+    <div class="label">
+      <div class="name">全局音量</div>
+      <div class="desc">所有播报音量</div>
+    </div>
+    <input class="aw-slider" type="range" min="0" max="1" step="0.05" :value="masterVolume"
+      on:input="onMasterVolume($event)" />
+    <button class="aw-btn aw-btn-secondary" on:click="previewMaster">
+      <i class="aw-ic" data-lucide="play"></i>试听
+    </button>
+  </div>
+
+  <o-fill :value="statusRows" fill-key="key">
+    <div class="row">
+      <div class="label">
+        <div class="name">{{$data.name}}</div>
+        <div class="desc">{{$data.desc}}</div>
+      </div>
+      <div class="aw-switch" class:on="$data.enabled" on:click="$host.toggle($data.key)"></div>
+      <div class="select-wrap">
+        <select class="aw-select" on:change="$host.onSoundChange($event, $data.key)">
+          <option value="beep" attr:selected="$data.sound === 'beep'">哔哔</option>
+          <option value="ding" attr:selected="$data.sound === 'ding'">叮</option>
+          <option value="chime" attr:selected="$data.sound === 'chime'">风铃</option>
+          <option value="alert" attr:selected="$data.sound === 'alert'">提醒</option>
+          <option value="success" attr:selected="$data.sound === 'success'">成功</option>
+          <option value="error" attr:selected="$data.sound === 'error'">错误</option>
+        </select>
+      </div>
+      <button class="aw-btn aw-btn-secondary" on:click="$host.preview($data.key)">
+        <i class="aw-ic" data-lucide="play"></i>试听
+      </button>
+    </div>
+  </o-fill>
+
+  <script>
+    export default async ({ load }) => {
+      const { getSettings, getMasterVolume, setSetting, setMasterVolume, playSound } = await load('../lib/sound.js');
+      const { createIcons } = await load('../lib/icons.js');
+
+      const STATUS_DEFS = {
+        awaiting_approval: { name: '等待审批', desc: 'agent 请求工具权限时' },
+        waiting_input: { name: '等待回复', desc: 'agent 提问需要你回复时' },
+        idle: { name: 'AI 回复完成', desc: 'agent 完成一轮回复时' },
+        background_task: { name: '后台任务', desc: 'agent 在跑后台任务时' },
+        compacting: { name: '上下文压缩', desc: 'agent 压缩上下文时' },
+        error: { name: '出错', desc: 'agent 回合出错时' },
+        ended: { name: '会话结束', desc: 'agent 会话结束时' },
+      };
+
+      return {
+        data: {
+          masterVolume: 0.7,
+          statusRows: [],
+        },
+        attached() {
+          this.masterVolume = getMasterVolume();
+          this.refreshRows();
+          try {
+            createIcons();
+            setTimeout(() => createIcons(), 300);
+          } catch {}
+        },
+        proto: {
+          /** 从 localStorage 重新读设置并刷新 statusRows（新数组引用，触发 o-fill 重渲染） */
+          refreshRows() {
+            const s = getSettings();
+            this.statusRows = Object.keys(STATUS_DEFS).map((key) => ({
+              key,
+              ...STATUS_DEFS[key],
+              ...s[key],
+            }));
+          },
+          toggle(key) {
+            const row = this.statusRows.find((r) => r.key === key);
+            if (!row) return;
+            setSetting(key, { enabled: !row.enabled });
+            this.refreshRows();
+          },
+          onSoundChange(e, key) {
+            const val = e && e.target ? e.target.value : null;
+            if (!val) return;
+            setSetting(key, { sound: val });
+            this.refreshRows();
+            playSound(val, this.masterVolume);
+          },
+          preview(key) {
+            const row = this.statusRows.find((r) => r.key === key);
+            if (row) playSound(row.sound, this.masterVolume);
+          },
+          previewMaster() {
+            playSound('ding', this.masterVolume);
+          },
+          onMasterVolume(e) {
+            this.masterVolume = Number(e.target.value);
+            setMasterVolume(this.masterVolume);
+          },
+        },
+      };
+    };
+  </script>
+</template>

@@ -1,0 +1,150 @@
+/**
+ * 自动安装各 agent 的 hook 配置（带备份）
+ *
+ * 目标文件：
+ *  - Claude Code: ~/.claude/settings.json        hooks: { "<Event>": [...] }（type:"http" 直连）
+ *  - Codex:       ~/.codex/config.toml           [hooks] 表（command+curl 转发）
+ *  - ZCode:       ~/.zcode/cli/config.json       hooks: { enabled:true, events: { "<Event>": [...] } }
+ *
+ * 用法：npm run hooks:install [-- --provider claude-code|codex|zcode]
+ * 不传 provider 则全部安装。先备份原文件为 .agent-watch.bak。
+ */
+import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { config } from '../src/config.js';
+
+const BASE = config.hookBaseUrl;
+const BACKUP_DIR = path.join(homedir(), '.agent-watch-backups');
+
+function expandHome(p) {
+  if (p === '~') return homedir();
+  if (p.startsWith('~/')) return path.join(homedir(), p.slice(2));
+  return p;
+}
+
+function backup(filePath) {
+  if (!existsSync(filePath)) return;
+  mkdirSync(BACKUP_DIR, { recursive: true });
+  const name = path.basename(filePath) + '.' + Date.now() + '.bak';
+  renameSync(filePath, path.join(BACKUP_DIR, name));
+  console.log(`  已备份 ${filePath} → ${BACKUP_DIR}/${name}`);
+}
+
+function curlCommand(url) {
+  return `curl -s -X POST ${BASE}${url} -H 'Content-Type: application/json' -d @-`;
+}
+
+/* ---------- Claude Code ---------- */
+function installClaude() {
+  const file = expandHome('~/.claude/settings.json');
+  console.log(`\n[Claude Code] ${file}`);
+  backup(file);
+  const settings = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  settings.hooks = settings.hooks || {};
+  const events = {
+    SessionStart: { url: '/api/hooks/claude-code', timeout: 10 },
+    UserPromptSubmit: { url: '/api/hooks/claude-code', timeout: 10 },
+    PreToolUse: { url: '/api/hooks/claude-code', timeout: 10 },
+    PostToolUse: { url: '/api/hooks/claude-code', timeout: 10 },
+    PostToolUseFailure: { url: '/api/hooks/claude-code', timeout: 10 },
+    PermissionRequest: { url: '/api/hooks/claude-code', timeout: 10 },
+    Notification: { url: '/api/hooks/claude-code', timeout: 10 },
+    Stop: { url: '/api/hooks/claude-code', timeout: 10 },
+    StopFailure: { url: '/api/hooks/claude-code', timeout: 10 },
+    SessionEnd: { url: '/api/hooks/claude-code', timeout: 10 },
+    SubagentStart: { url: '/api/hooks/claude-code', timeout: 10 },
+    SubagentStop: { url: '/api/hooks/claude-code', timeout: 10 },
+  };
+  for (const [ev, { url, timeout }] of Object.entries(events)) {
+    settings.hooks[ev] = [
+      { hooks: [{ type: 'http', url, timeout }] },
+    ];
+  }
+  writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  console.log('  ✅ hooks 已写入（type:"http" 直连）');
+}
+
+/* ---------- Codex ---------- */
+function installCodex() {
+  const file = expandHome('~/.codex/config.toml');
+  console.log(`\n[Codex] ${file}`);
+  backup(file);
+  const url = '/api/hooks/codex';
+  const events = [
+    'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse',
+    'PermissionRequest', 'PreCompact', 'PostCompact', 'Stop',
+    'SubagentStart', 'SubagentStop', 'SessionEnd',
+  ];
+  const marker = '# --- agent-watch hooks (自动生成，勿手改) ---';
+  const lines = ['', marker, '[hooks]'];
+  for (const ev of events) {
+    const timeout = ev === 'SessionEnd' ? 'timeout = 2' : 'timeout = 30';
+    lines.push(`${ev} = [ { hooks = [ { type = "command", command = "${curlCommand(url)}", ${timeout} } ] } ]`);
+  }
+  // 文件可能不存在（全新安装）→ 创建；已有 agent-watch 段 → 先移除再追加（幂等）
+  let content = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  const existingIdx = content.indexOf(marker);
+  if (existingIdx !== -1) {
+    content = content.slice(0, existingIdx).replace(/\n{3,}$/, '\n');
+  }
+  writeFileSync(file, content + lines.join('\n') + '\n');
+  console.log('  ✅ [hooks] 已写入（command+curl 转发）');
+}
+
+/* ---------- ZCode ---------- */
+function installZCode() {
+  const file = expandHome('~/.zcode/cli/config.json');
+  console.log(`\n[ZCode] ${file}`);
+  backup(file);
+  const cfg = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  const url = '/api/hooks/zcode';
+  const events = [
+    'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse',
+    'PostToolUseFailure', 'PermissionRequest', 'Stop',
+  ];
+  cfg.hooks = cfg.hooks || {};
+  cfg.hooks.enabled = true;
+  cfg.hooks.events = cfg.hooks.events || {};
+  for (const ev of events) {
+    cfg.hooks.events[ev] = [
+      { hooks: [{ type: 'command', command: curlCommand(url), timeout: 10 }] },
+    ];
+  }
+  writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  console.log('  ✅ hooks.enabled=true + events 已写入（command+curl 转发）');
+}
+
+const installers = {
+  'claude-code': installClaude,
+  codex: installCodex,
+  zcode: installZCode,
+};
+
+const argProvider = process.argv.find((a) => a.startsWith('--provider='))?.split('=')[1];
+const targets = argProvider ? [argProvider] : Object.keys(installers);
+
+console.log(`[agent-watch] 安装 hook 配置 → 目标: ${targets.join(', ')}`);
+console.log(`[agent-watch] 转发地址: ${BASE}`);
+
+// 校验 hook 服务端口是否存活（node server.js 未启动时安装，hook 只会失败）
+import { connect as netConnect } from 'node:net';
+const portOk = await new Promise((resolve) => {
+  const sock = netConnect({ host: '127.0.0.1', port: config.port, timeout: 800 });
+  sock.once('connect', () => { sock.destroy(); resolve(true); });
+  sock.once('error', () => resolve(false));
+});
+if (!portOk) {
+  console.error(`\n❌ hook 服务未在 http://127.0.0.1:${config.port} 监听（请先 npm start）`);
+  console.error('   安装虽会写入配置，但 hook 调用会全部失败。中止安装。');
+  process.exit(1);
+}
+
+for (const t of targets) {
+  if (!installers[t]) {
+    console.error(`  未知 provider: ${t}（可用: ${Object.keys(installers).join(', ')}）`);
+    continue;
+  }
+  installers[t]();
+}
+console.log('\n完成。请完全重启对应 agent 客户端使 hook 生效。');
