@@ -172,6 +172,17 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+/** 由 groups 重算各状态计数（增量更新后 counts 才能跟上） */
+function recount(groups) {
+  const c = {};
+  for (const g of groups) {
+    for (const s of g.sessions) {
+      c[s.state] = (c[s.state] || 0) + 1;
+    }
+  }
+  return c;
+}
+
 function updateSessionInSnapshot(session) {
   // 找到所在组并替换；找不到则创建
   // 注意：必须返回新数组引用，触发前端响应式更新
@@ -211,7 +222,7 @@ function updateSessionInSnapshot(session) {
     }
     g.sessions.unshift(session);
   }
-  snapshot = { ...snapshot, groups };
+  snapshot = { ...snapshot, groups, counts: recount(groups) };
   // 触发局部刷新（页面直接读 snapshot，这里不强制重渲染，由页面 subscribe 处理）
   notify({ type: 'updated', snapshot });
 }
