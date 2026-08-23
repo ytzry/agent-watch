@@ -1,25 +1,76 @@
 /**
  * WebSocket 客户端：连接 /ws，维护快照 + 状态变化事件
- * 供页面模块使用：import { connect, getSnapshot, onEvent } from '/lib/ws-client.js'
+ * 供页面模块使用：import { connect, getSnapshot, subscribe } from '/lib/ws-client.js'
+ *
+ * 连接保障：
+ * - 断线自动重连：指数退避 + 抖动（1s 起，封顶 30s），连接成功后退避计数清零
+ * - 应用层心跳：每 10s 发 ping（服务端回 pong），30s 未收到任何消息判定假死，主动重建
+ * - 建连超时保护：10s 内未 onopen（如 TCP 被中间设备挂起）则放弃重试
+ * - 页面恢复可见 / 网络恢复时立即重连，不等退避
  */
 
 let ws = null;
 let snapshot = { groups: [], counts: {} };
 let connected = false;
 const listeners = new Set();
-const stateListeners = new Set();
+
+const RETRY_BASE_MS = 1000;       // 首次重连延迟
+const RETRY_MAX_MS = 30000;       // 重连延迟上限
+const RETRY_FACTOR = 2;           // 每次失败翻倍
+const PING_INTERVAL_MS = 10000;   // 心跳间隔
+const STALE_MS = 30000;           // 超过此时长未收到任何消息 → 连接假死
+const CONNECT_TIMEOUT_MS = 10000; // 建连超时
+
+let retryCount = 0;
+let retryTimer = null;   // 重连延迟定时器
+let pingTimer = null;    // 心跳定时器
+let connectTimer = null; // 建连超时定时器
+let lastMessageAt = 0;   // 最近一次收到消息的时间戳
 
 function notify(msg) {
   for (const fn of listeners) fn(msg);
 }
 
+/** 已有可用连接（含正在建立）则跳过；已关闭的旧连接不阻塞重连 */
+function isOpenOrConnecting() {
+  return ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING);
+}
+
+function clearTimers() {
+  clearTimeout(retryTimer);
+  clearTimeout(connectTimer);
+  clearInterval(pingTimer);
+  retryTimer = null;
+  connectTimer = null;
+  pingTimer = null;
+}
+
 export function connect() {
-  if (ws) return;
+  if (isOpenOrConnecting()) return;
+  clearTimeout(retryTimer);
+  retryTimer = null;
+
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
+  lastMessageAt = Date.now();
+
+  // 建连超时保护：连接长时间打不开则放弃重建
+  connectTimer = setTimeout(() => {
+    if (ws && ws.readyState === WebSocket.CONNECTING) {
+      console.warn('[ws] 连接超时，放弃并重试');
+      teardownForRetry();
+      scheduleReconnect();
+    }
+  }, CONNECT_TIMEOUT_MS);
 
   ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
+    lastMessageAt = Date.now();
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return;
+    }
     if (msg.type === 'snapshot') {
       snapshot = msg.data;
       notify({ type: 'snapshot', data: msg.data });
@@ -34,19 +85,92 @@ export function connect() {
     } else if (msg.type === 'events') {
       notify({ type: 'events', data: msg.data });
     }
+    // ping/pong 及未知消息无需处理
+  };
+
+  ws.onopen = () => {
+    connected = true;
+    clearTimeout(connectTimer);
+    retryCount = 0; // 连接成功，重置退避
+    startHeartbeat();
+    notify({ type: 'connected' });
+  };
+
+  ws.onerror = () => {
+    // error 后必然触发 close，重连统一在 onclose 处理
   };
 
   ws.onclose = () => {
     connected = false;
+    stopHeartbeat();
     notify({ type: 'disconnected' });
-    // 自动重连
-    setTimeout(connect, 3000);
-  };
-  ws.onopen = () => {
-    connected = true;
-    notify({ type: 'connected' });
+    scheduleReconnect();
   };
 }
+
+/**
+ * 断开并清理旧连接，确保后续只调度一次重连。
+ * 必须先把 ws 置空，否则旧 onclose 会再调一次 scheduleReconnect。
+ */
+function teardownForRetry() {
+  clearTimeout(connectTimer);
+  connectTimer = null;
+  if (ws) {
+    const dead = ws;
+    ws = null;
+    dead.onclose = null;
+    try { dead.close(); } catch {}
+  }
+  stopHeartbeat();
+}
+
+/** 指数退避 + 抖动调度重连，避免多端同时重连打满服务端 */
+function scheduleReconnect() {
+  if (retryTimer) return; // 已有待执行的重连
+  const delay = Math.min(RETRY_BASE_MS * Math.pow(RETRY_FACTOR, retryCount), RETRY_MAX_MS);
+  retryCount++;
+  const jittered = delay * (0.7 + Math.random() * 0.6); // ±30% 抖动
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    connect();
+  }, jittered);
+}
+
+/** 应用层心跳：定期发 ping，超时未收到任何消息判定假死并重建连接 */
+function startHeartbeat() {
+  stopHeartbeat();
+  pingTimer = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping' }));
+    }
+    if (Date.now() - lastMessageAt > STALE_MS) {
+      console.warn('[ws] 心跳超时，连接假死，重建连接');
+      teardownForRetry();
+      scheduleReconnect();
+    }
+  }, PING_INTERVAL_MS);
+}
+
+function stopHeartbeat() {
+  clearInterval(pingTimer);
+  pingTimer = null;
+}
+
+// 页面恢复可见 / 网络恢复 → 立即重连，不等退避
+window.addEventListener('online', () => {
+  if (!isOpenOrConnecting()) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    connect();
+  }
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !isOpenOrConnecting()) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    connect();
+  }
+});
 
 function updateSessionInSnapshot(session) {
   // 找到所在组并替换；找不到则创建

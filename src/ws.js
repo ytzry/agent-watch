@@ -9,6 +9,16 @@ export function setupWs(server) {
     ws.send(JSON.stringify({ type: 'snapshot', data: hub.snapshot() }));
     // 补发最近事件（前端重连后能恢复状态）
     ws.send(JSON.stringify({ type: 'events', data: hub.recentEvents(50) }));
+
+    // 应用层心跳：响应前端 ping，用作连接假死探测
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg && msg.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        }
+      } catch {}
+    });
   });
 
   // hub 变化 → 广播

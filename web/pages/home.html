@@ -2,9 +2,8 @@
   <style>
     :host { display: block; height: 100%; overflow: hidden; }
     .page {
+      /* 不限制内容宽度：全宽铺开，只加外边距，列数交给网格随宽度动态增减 */
       padding: 0 1rem;
-      max-width: 100%;
-      margin: 0 auto;
       /* 布局：header 固定 + 列表区滚动 */
       height: 100%;
       display: flex;
@@ -13,7 +12,7 @@
       box-sizing: border-box;
     }
     @media (min-width: 720px) {
-      .page { max-width: 720px; padding: 0 1.5rem; }
+      .page { padding: 0 1.5rem; }
     }
     /* 会话列表区：唯一可滚动区域 */
     .list-area {
@@ -118,17 +117,25 @@
       border-radius: 2px;
     }
     .group-title .count {
-      font-weight: 400;
-      font-size: 0.7rem;
-      color: hsl(var(--muted-foreground) / 0.7);
       margin-left: auto;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: hsl(var(--primary));
+      background: hsl(var(--primary) / 0.1);
+      border: 1px solid hsl(var(--primary) / 0.25);
+      border-radius: 9999px;
+      padding: 1px 10px;
+      line-height: 1.6;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .cards { display: flex; flex-direction: column; gap: 10px; }
     /* ===== 自适应多列：窄屏自动 1 列，宽屏自动多列（物理横屏/桌面由媒体查询驱动） ===== */
     @media (min-width: 700px) {
       .cards {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
         gap: 12px;
         align-items: stretch;      /* 行内等高，配合 task-card 的 height:100% */
       }
@@ -139,7 +146,7 @@
         --todos-max: 2.4em;
       }
     }
-    @media (min-width: 1100px) {
+    @media (min-width: 1360px) {
       .cards { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
     }
     /* ===== 强制横屏（CSS 旋转模拟）：媒体查询按物理视口判断，旋转后宽度=视口高，
