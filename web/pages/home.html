@@ -399,9 +399,15 @@
             } else if (msg.type === 'updated' || msg.type === 'session_update') {
               this.applySnapshot(getSnapshot());
             } else if (msg.type === 'connected') {
+              // 声音播报：连接成功（首次连接 / 断线后恢复）
+              if (!this._wasConnected) notifyState('ws_connected');
               this.connected = true;
+              this._wasConnected = true;
             } else if (msg.type === 'disconnected') {
+              // 声音播报：断链（重连失败循环中不重复播）
+              if (this._wasConnected) notifyState('ws_disconnected');
               this.connected = false;
+              this._wasConnected = false;
             }
           });
           connect();

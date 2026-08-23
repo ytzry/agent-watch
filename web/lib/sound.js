@@ -3,7 +3,8 @@
  * 提供 6 种内置音 + 音量控制 + 试听
  *
  * 播报配置存 localStorage（每状态：{ enabled, sound, volume }）
- * 默认：waiting_input/awaiting_approval → alert，idle → success，error → error，其余关
+ * 默认：waiting_input/awaiting_approval → alert，idle → success，error → error，
+ *       ws_disconnected → error，ws_connected → success，其余关
  */
 
 export const SOUNDS = {
@@ -23,6 +24,8 @@ export const STATUS_KEYS = [
   'compacting',
   'error',
   'ended',
+  'ws_disconnected',
+  'ws_connected',
 ];
 
 const DEFAULT_SETTINGS = {
@@ -33,6 +36,8 @@ const DEFAULT_SETTINGS = {
   compacting: { enabled: false, sound: 'beep' },
   error: { enabled: true, sound: 'error' },
   ended: { enabled: false, sound: 'ding' },
+  ws_disconnected: { enabled: true, sound: 'error' },
+  ws_connected: { enabled: true, sound: 'success' },
 };
 
 const MASTER_VOLUME_KEY = 'agent-watch-master-volume';
