@@ -101,12 +101,15 @@ export function applyEvent(ev) {
       if (!s.project) patch.project = projectFromCwd(meta.directory);
     }
   }
-  if (ev.title && !s.title) patch.title = ev.title;
-  else if (!s.title && ev.provider === 'zcode') {
-    // title 缺失同理从 db 补（db 有 ai 生成的会话标题，比空着强）
+  // 标题优先级（ZCode）：db 官方标题 > hook payload 标题（对 ZCode 通常是首条 prompt，兜底用）。
+  // db 是用户/模型生成的会话标题（如"Vue库存周期盘点列表"），比 prompt 更稳定；只补空，不覆盖已有。
+  // 注意：ZCode 的 ev.title 就是当次 prompt，绝不能当"官方标题"——db 查询必须优先于它。
+  if (!s.title && ev.provider === 'zcode') {
     const meta = zcodeSessionMeta(ev.sessionId);
     if (meta?.title) patch.title = meta.title;
   }
+  // 非 ZCode 或 db 无标题时才用 ev.title 兜底（Claude/Codex 的 ev.title 是真实描述；ZCode 是 prompt）
+  if (ev.title && !s.title && !patch.title && ev.provider !== 'zcode') patch.title = ev.title;
   if (ev.mode) patch.mode = ev.mode;
   if (ev.lastMessage) patch.lastMessage = ev.lastMessage;
 
@@ -121,25 +124,19 @@ export function applyEvent(ev) {
       try {
         const filePath = findSessionFile(sessionId, provider, cwd);
         if (!filePath) return; // 无 rollout 文件（非模型会话）→ 跳过
-        // parseZCodeRollout 直接返回 usage 对象；Claude/Codex 解析器返回 { usage, ... }
+        // 三家解析器统一返回 { usage?, firstPrompt?, lastMessage?, aiTitle? }（ZCode 无 ai-title/lastMessage）
         let result = null;
-        let usage = null;
-        if (provider === 'zcode') usage = parseZCodeRollout(filePath, sessionId);
-        else if (provider === 'claude-code') {
-          result = parseClaudeTranscript(filePath, sessionId);
-          usage = result?.usage;
-        } else if (provider === 'codex') {
-          result = parseCodexRollout(filePath, sessionId);
-          usage = result?.usage;
-        }
-        if (!usage) return;
+        if (provider === 'zcode') result = parseZCodeRollout(filePath, sessionId);
+        else if (provider === 'claude-code') result = parseClaudeTranscript(filePath, sessionId);
+        else if (provider === 'codex') result = parseCodexRollout(filePath, sessionId);
+        if (!result?.usage) return;
         const patch2 = {};
-        const usage2 = computeUsage(usage);
+        const usage2 = computeUsage(result.usage);
         if (usage2) patch2.usage = usage2;
-        // 标题：ai-title > 首条 user prompt；都没有保留现有（hook payload 里的标题已覆盖）
-        if (result?.aiTitle) patch2.title = result.aiTitle;
-        else if (result?.firstPrompt && !hub.sessions.get(sessionId)?.title) patch2.title = result.firstPrompt;
-        if (result?.lastMessage) patch2.lastMessage = result.lastMessage;
+        // 标题：ai-title > 首条 user prompt；都没有保留现有。ZCode 用 db 标题（已由 applyEvent 同步补过）
+        if (result.aiTitle) patch2.title = result.aiTitle;
+        else if (result.firstPrompt && !hub.sessions.get(sessionId)?.title) patch2.title = result.firstPrompt;
+        if (result.lastMessage) patch2.lastMessage = result.lastMessage;
         // todo：hook payload 无 todo 时从文件补（TodoWrite 的 tool_input 落盘在 rollout）
         if (provider === 'zcode' && !ev.todo) {
           const todo = parseTodoTail(filePath);
@@ -159,7 +156,6 @@ export function applyEvent(ev) {
     case EVENTS.PROMPT:
       hub.update(ev.sessionId, {
         ...patch,
-        title: ev.title || s.title,
         state: STATES.RUNNING,
       }, { stateChangedBy: 'prompt' });
       break;

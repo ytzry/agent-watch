@@ -61,7 +61,7 @@ export function watchSessionFile(sessionId, provider, cwd) {
   const parse = () => {
     let result = null;
     if (provider === 'zcode') {
-      result = { usage: parseZCodeRollout(filePath, sessionId), lastMessage: null };
+      result = parseZCodeRollout(filePath, sessionId);
       lastWriteMs = Date.now(); // 文件有写 → 刷新活跃基准
     } else if (provider === 'claude-code') result = parseClaudeTranscript(filePath, sessionId);
     else result = parseCodexRollout(filePath, sessionId);
@@ -72,9 +72,9 @@ export function watchSessionFile(sessionId, provider, cwd) {
     const patch = {};
     const usage = computeUsage(result.usage);
     if (usage) patch.usage = usage;
-    // 标题：ai-title > 首条 user prompt（开源项目优先级）；都没有保留现有
-    if (result.aiTitle) patch.title = result.aiTitle;
-    else if (result.firstPrompt) patch.title = result.firstPrompt;
+    // 标题：ai-title > 首条 user prompt；只补空（db 官方标题 / hook 标题优先，不覆盖）
+    if (result.aiTitle && !s.title) patch.title = result.aiTitle;
+    else if (result.firstPrompt && !s.title) patch.title = result.firstPrompt;
     if (result.lastMessage) patch.lastMessage = result.lastMessage;
     if (Object.keys(patch).length) hub.update(sessionId, patch);
   };

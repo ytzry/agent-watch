@@ -215,7 +215,36 @@ function readFileTail(filePath, maxBytes) {
 
 /* ---------- 解析器（ZCode / Claude / Codex） ---------- */
 
-/** 解析 ZCode rollout JSONL，提取 usage 和 max_tokens（只读文件尾部，避免大文件 OOM） */
+/** 从 request.body.messages 里提取首条真实用户输入（标题兜底）。
+ *  ZCode 的 rollout 每条 request 只有 [system, user] 两消息：
+ *  - system 是英文标题生成提示词（"Generate a concise title..."），必须跳过
+ *  - 首条 user 即本次输入的 prompt
+ *  tool 相关历史（<command> 等）不在此文件里（rollout 只记模型 I/O）。 */
+function firstUserPromptFromBody(body) {
+  try {
+    if (typeof body === 'string') body = JSON.parse(body);
+    if (!body || typeof body !== 'object') return '';
+    const msgs = Array.isArray(body.messages) ? body.messages : [];
+    for (const m of msgs) {
+      if (m?.role !== 'user') continue;
+      const c = m.content;
+      let text = '';
+      if (typeof c === 'string') text = c.trim();
+      else if (Array.isArray(c)) {
+        text = c
+          .filter((x) => x?.type === 'text' && !(x.text || '').startsWith('<'))
+          .map((x) => x.text)
+          .join(' ')
+          .trim();
+      }
+      if (text && !text.startsWith('[Request') && !text.startsWith('<')) return text.slice(0, 120);
+    }
+  } catch {}
+  return '';
+}
+
+/** 解析 ZCode rollout JSONL，提取 usage 和 max_tokens（只读文件尾部，避免大文件 OOM）。
+ *  返回 { usage, firstPrompt }（与 Claude/Codex 解析器同为整对象，title 由 db 提供）。 */
 export function parseZCodeRollout(filePath, sessionId) {
   try {
     const size = statSync(filePath).size;
@@ -228,8 +257,11 @@ export function parseZCodeRollout(filePath, sessionId) {
     const lines = text.split('\n').filter(Boolean);
     let last = null;
     let modelId = '';
+    let firstPrompt = '';
     // 缓存命中率统计（当前会话，最近 readLen 内所有请求）
     let sumInput = 0, sumCacheRead = 0, sumCacheCreate = 0;
+    // firstPrompt 是文件开头的首条请求；只有当整个文件都在读窗内（<=512KB）时才能取到
+    const wholeFileInWindow = size <= readLen;
     for (const line of lines) {
       try {
         const obj = JSON.parse(line);
@@ -239,7 +271,11 @@ export function parseZCodeRollout(filePath, sessionId) {
         if (u && (u.inputTokens ?? 0) >= 500) last = u;
         // 模型 id（从 model.modelId 读）
         if (!modelId && obj.model?.modelId) modelId = obj.model.modelId;
-        // 缓存命中率：累计最近所有请求（只算有实际 token 的）
+        // 首条真实 user prompt（标题兜底；文件超出读窗时取不到，留给 db 兜底）
+        if (!firstPrompt && wholeFileInWindow) firstPrompt = firstUserPromptFromBody(obj.request?.body);
+        // 缓存命中率：累计最近所有请求（只算有实际 token 的）。
+        // 注意：ZCode 的 inputTokens 已含 cacheReadTokens（input = 非缓存 + 缓存），
+        // 分母直接用 inputTokens 即可，不能再把 cacheRead 加一遍（否则双重计数、命中率被低估）。
         if (u && (u.inputTokens ?? 0) > 0) {
           sumInput += u.inputTokens ?? 0;
           sumCacheRead += u.cacheReadTokens ?? 0;
@@ -247,12 +283,13 @@ export function parseZCodeRollout(filePath, sessionId) {
         }
       } catch {}
     }
-    if (!last) return null;
     // 上下文窗口：优先从官方 model catalog 查（deepseek-v4-flash = 1000000），再按模型名推断
     // 之前用 request.body.max_tokens（输出上限）是错的
     const ctxWindow = contextWindowFor(modelId);
-    const hitDenom = sumInput + sumCacheRead + sumCacheCreate;
-    return {
+    // 命中率分母 = 总输入（inputTokens 已含缓存读取）。cacheCreate 另计为新增写入，
+    // 不计入命中率分母（它属于"本次写入、下次才读"的冷启动成本）。
+    const hitDenom = sumInput + sumCacheCreate;
+    const usage = last ? {
       inputTokens: last.inputTokens ?? null,
       outputTokens: last.outputTokens ?? null,
       // ZCode 的 totalTokens 是单次请求 input+output = 当前上下文
@@ -263,7 +300,9 @@ export function parseZCodeRollout(filePath, sessionId) {
       maxTokens: ctxWindow,
       // 缓存命中率 = cache_read / (input + cache_read + cache_create)，范围 0-1
       cacheHitRate: hitDenom > 0 ? Math.round((sumCacheRead / hitDenom) * 1000) / 1000 : null,
-    };
+    } : null;
+    if (!usage && !firstPrompt) return null;
+    return { usage, firstPrompt: firstPrompt || null };
   } catch {
     return null;
   }
@@ -335,7 +374,9 @@ export function parseClaudeTranscript(filePath, sessionId) {
     }
     const totalTokens = totalInput + totalOutput + totalCacheRead + totalCacheCreate;
     if (!totalTokens) return { usage: null, lastMessage: lastText || null, aiTitle, firstPrompt, cwd };
-    const hitDenom = totalInput + totalCacheRead + totalCacheCreate;
+    // 命中率分母 = 非缓存输入 + 缓存读取（Claude 的 input_tokens 不包含 cache_read，分开计数）。
+    // cache_creation 是本次写入的冷启动 token，不计入命中率（它属于成本，不属于命中）。
+    const hitDenom = totalInput + totalCacheRead;
     return {
       usage: {
         inputTokens: totalInput,
@@ -359,7 +400,11 @@ export function parseClaudeTranscript(filePath, sessionId) {
   }
 }
 
-/** 解析 Codex rollout（Responses API usage 结构）。只读尾部（usage 在最新记录，避免大文件 OOM）。 */
+/** 解析 Codex rollout（Responses API 结构）。只读尾部（usage 在最新记录，避免大文件 OOM）。
+ *  真实结构（v1.6+）：usage 在 `event_msg` 的 `payload.type === 'token_count'` 里，
+ *  字段为 info.total_token_usage / last_token_usage：{ input_tokens, cached_input_tokens, output_tokens, ... }。
+ *  cached_input_tokens 已含在 input_tokens 中（input = 非缓存 + 缓存）。
+ *  旧版监听 response.completed 的结构已不存在，这里按新版解析。 */
 export function parseCodexRollout(filePath, sessionId) {
   try {
     const size = statSync(filePath).size;
@@ -374,34 +419,42 @@ export function parseCodexRollout(filePath, sessionId) {
     const lines = body.split('\n').filter(Boolean);
     let lastUsage = null;
     let lastText = '';
-    let sumInput = 0, sumCacheRead = 0;
+    // 命中率：累计所有 token_count 事件（input 含 cached，分母=总输入即可）
+    let sumInput = 0, sumCached = 0;
     for (const line of lines) {
       try {
         const obj = JSON.parse(line);
-        if (obj.type === 'response.completed' && obj.response?.usage) {
-          const u = obj.response.usage;
-          lastUsage = {
-            inputTokens: u.input_tokens ?? null,
-            outputTokens: u.output_tokens ?? null,
-            totalTokens: u.total_tokens ?? null,
-            cacheReadTokens: u.input_tokens_details?.cached_tokens ?? null,
-          };
-          // 缓存命中率：累计所有 response.completed（Codex 无 cache creation 概念）
-          if (u.input_tokens ?? 0) {
+        if (obj.type === 'event_msg' && obj.payload?.type === 'token_count' && obj.payload.info) {
+          const info = obj.payload.info;
+          const u = info.last_token_usage || info.total_token_usage || null;
+          if (u && (u.input_tokens ?? 0) > 0) {
+            lastUsage = {
+              inputTokens: u.input_tokens ?? null,
+              outputTokens: u.output_tokens ?? null,
+              totalTokens: u.total_tokens ?? null,
+              cacheReadTokens: u.cached_input_tokens ?? null,
+              contextTokens: u.input_tokens ?? null,
+              maxTokens: info.model_context_window ?? null,
+            };
             sumInput += u.input_tokens ?? 0;
-            sumCacheRead += u.input_tokens_details?.cached_tokens ?? 0;
+            sumCached += u.cached_input_tokens ?? 0;
           }
         }
-        if (obj.type === 'response.output_text') {
-          lastText = obj.text || lastText;
+        if (obj.type === 'response_item' && obj.payload?.type === 'message' && obj.payload?.role === 'assistant') {
+          const texts = (obj.payload.content || [])
+            .filter((c) => c?.type === 'output_text')
+            .map((c) => c.text)
+            .join('\n');
+          if (texts) lastText = texts;
         }
       } catch {}
     }
-    const hitDenom = sumInput + sumCacheRead;
+    // 命中率 = cached / 总输入（input_tokens 已含 cached）。cache_creation 无此概念。
+    const hitDenom = sumInput;
     return {
       usage: lastUsage ? {
         ...lastUsage,
-        cacheHitRate: hitDenom > 0 ? Math.round((sumCacheRead / hitDenom) * 1000) / 1000 : null,
+        cacheHitRate: hitDenom > 0 ? Math.round((sumCached / hitDenom) * 1000) / 1000 : null,
       } : null,
       lastMessage: lastText || null,
     };
