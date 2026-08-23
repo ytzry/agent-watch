@@ -134,7 +134,7 @@ function findZCodeRollout(sessionId, cwd) {
 }
 
 /** 解析 ZCode rollout JSONL，提取 usage 和 max_tokens（只读文件尾部，避免大文件 OOM） */
-function parseZCodeRollout(filePath) {
+function parseZCodeRollout(filePath, sessionId) {
   try {
     const fd = openSync(filePath, 'r');
     const size = statSync(filePath).size;
@@ -147,6 +147,8 @@ function parseZCodeRollout(filePath) {
     const lines = text.split('\n').filter(Boolean);
     let last = null;
     let modelId = '';
+    // 缓存命中率统计（当前会话，最近 readLen 内所有请求）
+    let sumInput = 0, sumCacheRead = 0, sumCacheCreate = 0;
     for (const line of lines) {
       try {
         const obj = JSON.parse(line);
@@ -156,12 +158,19 @@ function parseZCodeRollout(filePath) {
         if (u && (u.inputTokens ?? 0) >= 500) last = u;
         // 模型 id（从 model.modelId 读）
         if (!modelId && obj.model?.modelId) modelId = obj.model.modelId;
+        // 缓存命中率：累计最近所有请求（只算有实际 token 的）
+        if (u && (u.inputTokens ?? 0) > 0) {
+          sumInput += u.inputTokens ?? 0;
+          sumCacheRead += u.cacheReadTokens ?? 0;
+          sumCacheCreate += u.cacheCreationTokens ?? u.cacheWriteTokens ?? 0;
+        }
       } catch {}
     }
     if (!last) return null;
     // 上下文窗口：优先从官方 model catalog 查（deepseek-v4-flash = 1000000），再按模型名推断
     // 之前用 request.body.max_tokens（输出上限）是错的
     const ctxWindow = contextWindowFor(modelId);
+    const hitDenom = sumInput + sumCacheRead + sumCacheCreate;
     return {
       inputTokens: last.inputTokens ?? null,
       outputTokens: last.outputTokens ?? null,
@@ -171,6 +180,8 @@ function parseZCodeRollout(filePath) {
       cacheReadTokens: last.cacheReadTokens ?? null,
       reasoningTokens: last.reasoningTokens ?? null,
       maxTokens: ctxWindow,
+      // 缓存命中率 = cache_read / (input + cache_read + cache_create)，范围 0-1
+      cacheHitRate: hitDenom > 0 ? Math.round((sumCacheRead / hitDenom) * 1000) / 1000 : null,
     };
   } catch {
     return null;
@@ -178,7 +189,7 @@ function parseZCodeRollout(filePath) {
 }
 
 /** 解析 Claude transcript（assistant 消息行含 usage）。只读文件尾部（避免大文件 OOM）。 */
-function parseClaudeTranscript(filePath) {
+function parseClaudeTranscript(filePath, sessionId) {
   try {
     const size = statSync(filePath).size;
     const fd = openSync(filePath, 'r');
@@ -243,6 +254,7 @@ function parseClaudeTranscript(filePath) {
     }
     const totalTokens = totalInput + totalOutput + totalCacheRead + totalCacheCreate;
     if (!totalTokens) return { usage: null, lastMessage: lastText || null, aiTitle, firstPrompt, cwd };
+    const hitDenom = totalInput + totalCacheRead + totalCacheCreate;
     return {
       usage: {
         inputTokens: totalInput,
@@ -253,6 +265,8 @@ function parseClaudeTranscript(filePath) {
         totalTokens: lastContextInput || totalInput,
         contextTokens: lastContextInput || totalInput,
         sessionTotalTokens: totalTokens,
+        // 缓存命中率 = cache_read / (input + cache_read + cache_create)，范围 0-1
+        cacheHitRate: hitDenom > 0 ? Math.round((totalCacheRead / hitDenom) * 1000) / 1000 : null,
       },
       lastMessage: lastText || null,
       aiTitle,
@@ -265,7 +279,7 @@ function parseClaudeTranscript(filePath) {
 }
 
 /** 解析 Codex rollout（Responses API usage 结构）。只读尾部（usage 在最新记录，避免大文件 OOM）。 */
-function parseCodexRollout(filePath) {
+function parseCodexRollout(filePath, sessionId) {
   try {
     const size = statSync(filePath).size;
     const fd = openSync(filePath, 'r');
@@ -279,6 +293,7 @@ function parseCodexRollout(filePath) {
     const lines = body.split('\n').filter(Boolean);
     let lastUsage = null;
     let lastText = '';
+    let sumInput = 0, sumCacheRead = 0;
     for (const line of lines) {
       try {
         const obj = JSON.parse(line);
@@ -290,13 +305,25 @@ function parseCodexRollout(filePath) {
             totalTokens: u.total_tokens ?? null,
             cacheReadTokens: u.input_tokens_details?.cached_tokens ?? null,
           };
+          // 缓存命中率：累计所有 response.completed（Codex 无 cache creation 概念）
+          if (u.input_tokens ?? 0) {
+            sumInput += u.input_tokens ?? 0;
+            sumCacheRead += u.input_tokens_details?.cached_tokens ?? 0;
+          }
         }
         if (obj.type === 'response.output_text') {
           lastText = obj.text || lastText;
         }
       } catch {}
     }
-    return { usage: lastUsage, lastMessage: lastText || null };
+    const hitDenom = sumInput + sumCacheRead;
+    return {
+      usage: lastUsage ? {
+        ...lastUsage,
+        cacheHitRate: hitDenom > 0 ? Math.round((sumCacheRead / hitDenom) * 1000) / 1000 : null,
+      } : null,
+      lastMessage: lastText || null,
+    };
   } catch {
     return { usage: null, lastMessage: null };
   }
@@ -361,13 +388,13 @@ export function watchSessionFile(sessionId, provider, cwd) {
   // 每 60s 检查一次（watchFile 只监听变化，不监听"停止变化"）
   const livenessTimer = setInterval(zcodeLivenessCheck, 60 * 1000);
 
-  const parse = () => {
-    let result = null;
-    if (provider === 'zcode') {
-      result = { usage: parseZCodeRollout(filePath), lastMessage: null };
-      lastWrite.ms = Date.now(); // 文件有写 → 刷新活跃基准
-    } else if (provider === 'claude-code') result = parseClaudeTranscript(filePath);
-    else result = parseCodexRollout(filePath);
+    const parse = () => {
+      let result = null;
+      if (provider === 'zcode') {
+        result = { usage: parseZCodeRollout(filePath, sessionId), lastMessage: null };
+        lastWrite.ms = Date.now(); // 文件有写 → 刷新活跃基准
+      } else if (provider === 'claude-code') result = parseClaudeTranscript(filePath, sessionId);
+      else result = parseCodexRollout(filePath, sessionId);
     if (!result) return;
 
     const s = hub.sessions.get(sessionId);

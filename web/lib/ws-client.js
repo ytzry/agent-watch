@@ -55,18 +55,31 @@ function updateSessionInSnapshot(session) {
     ...g,
     sessions: [...g.sessions],
   }));
+  const project = session.project || session.cwd || '未知项目';
   let found = false;
   for (const g of groups) {
     const idx = g.sessions.findIndex((s) => s.id === session.id);
     if (idx >= 0) {
-      g.sessions[idx] = session;
+      // 会话已在某组：若 project 变化（如先以空 project 归到"未知项目"，
+      // 之后 cwd/title 补齐），要把会话迁移到正确组，否则永远卡在旧组
+      if (g.project !== project) {
+        g.sessions.splice(idx, 1);
+        if (g.sessions.length === 0) groups.splice(groups.indexOf(g), 1);
+        let ng = groups.find((x) => x.project === project);
+        if (!ng) {
+          ng = { project, sessions: [] };
+          groups.push(ng);
+        }
+        ng.sessions.unshift(session);
+      } else {
+        g.sessions[idx] = session;
+      }
       found = true;
       break;
     }
   }
   if (!found) {
     // 新会话：按 project 归组
-    const project = session.project || session.cwd || '未知项目';
     let g = groups.find((x) => x.project === project);
     if (!g) {
       g = { project, sessions: [] };

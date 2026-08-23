@@ -30,6 +30,7 @@
       gap: 12px;
       box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
       width: 100%;
+      height: 100%;
       box-sizing: border-box;
       -webkit-tap-highlight-color: transparent;
       transition: border-color 0.2s, box-shadow 0.2s;
@@ -72,6 +73,9 @@
     .main {
       flex: 1;
       min-width: 0;
+      /* 等高卡片：内容自适应，底部时间贴底对齐 */
+      display: flex;
+      flex-direction: column;
     }
     .top {
       display: flex;
@@ -192,7 +196,8 @@
     .time {
       font-size: 0.7rem;
       color: hsl(var(--muted-foreground) / 0.7);
-      margin-top: 7px;
+      margin-top: auto;
+      padding-top: 7px;
       text-align: right;
       display: flex;
       align-items: center;
@@ -205,6 +210,16 @@
     }
     .hidden {
       display: none !important;
+    }
+    /* ===== 紧凑模式（多列网格时由父级注入 CSS 变量启用）：压缩动态高度，让卡片更整齐 ===== */
+    /* 消息行数：默认 2 行，多列时 1 行 */
+    .msg {
+      -webkit-line-clamp: var(--msg-clamp, 2);
+    }
+    /* todo 条数：默认全部展示，多列时最多约 2 条 */
+    .todos {
+      max-height: var(--todos-max, none);
+      overflow: hidden;
     }
     /* ===== 状态徽章（统一中性底色，状态用文字色区分；不改变卡片背景观感） ===== */
     .aw-badge {
@@ -269,7 +284,7 @@
         <div class="usage-bar" :style.width="usage.pct + '%'"></div>
       </div>
       <div class="usage-text" class:hidden="!hasUsage">
-        <i class="aw-ic" data-lucide="gauge"></i>{{usage.contextTokens || usage.totalTokens}} / {{usage.maxTokens}} ({{usage.pct}}%)
+        <i class="aw-ic" data-lucide="gauge"></i>{{usageText}}<span class:hidden="!cacheHitText"> · 缓存 {{cacheHitText}}</span>
       </div>
       <div class="time">
         <i class="aw-ic" data-lucide="clock"></i>{{timeLabel}}
@@ -318,6 +333,8 @@
           todo: [],
           usage: null,
           hasUsage: false,
+          usageText: '',
+          cacheHitText: '',
           subagentCount: 0,
           timeLabel: '',
         },
@@ -340,6 +357,16 @@
             if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
             return d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
           },
+          // token 容量格式化（行业惯例，同 ccusage）：<1M 用 k（千），≥1M 用 M（百万）
+          // 例：200000 → 200k，128000 → 128k，1000000 → 1M，240771 → 241k
+          fmtTokens(n) {
+            if (!n || !isFinite(n) || n <= 0) return '';
+            if (n >= 1e6) {
+              const m = n / 1e6;
+              return (m >= 10 ? Math.round(m) : m.toFixed(1).replace(/\.0$/, '')) + 'M';
+            }
+            return Math.round(n / 1e3) + 'k';
+          },
           applySession() {
             // session 作为属性传入是 JSON 字符串（HTML attribute），解析为对象
             let s = this.session;
@@ -360,6 +387,18 @@
             this.todo = s.todo || [];
             this.usage = s.usage || {};
             this.hasUsage = !!(s.usage && s.usage.pct != null);
+            // 上下文容量：当前用量 / 总容量 (百分比)，如 174k / 1M (17%)
+            if (this.hasUsage) {
+              const ctx = s.usage.contextTokens || s.usage.totalTokens || 0;
+              const max = s.usage.maxTokens || 0;
+              this.usageText = `${this.fmtTokens(ctx)} / ${this.fmtTokens(max)} (${s.usage.pct}%)`;
+              // 缓存命中率：0-1 → 百分比（cc-switch 口径 cache_read/总输入）
+              const hit = s.usage.cacheHitRate;
+              this.cacheHitText = hit != null && isFinite(hit) ? Math.round(hit * 100) + '%' : '';
+            } else {
+              this.usageText = '';
+              this.cacheHitText = '';
+            }
             this.subagentCount = (s.subagents || []).length;
             this.timeLabel = this.formatTime(s.updatedAt);
             // 平台品牌色 → 宿主属性（CSS 变量）

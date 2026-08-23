@@ -1,7 +1,10 @@
 import { Router } from 'express';
+import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { homedir } from 'node:os';
 import { hub, STATES } from '../hub.js';
 import { EVENTS, getAdapter, listAdapters, getEventName } from '../adapters/index.js';
-
 /**
  * 从 cwd 推断项目名：向上找 .git 目录，取仓库名；没有则取 basename。
  * 注意：hook 运行时拿 cwd 即可，不必读磁盘（避免 hook 阻塞）。这里做纯路径推断。
@@ -18,11 +21,51 @@ export function projectFromCwd(cwd) {
 
 const router = Router();
 
+// ZCode 官方会话 db 的轻量缓存查询（key: sessionId → { title, directory }）
+// hook payload 缺失 cwd/title 时兜底用；查不到返回 null（不阻塞事件）
+const zcodeMetaCache = new Map();
+const ZCODE_DB = path.join(homedir(), '.zcode/cli/db/db.sqlite');
+function zcodeSessionMeta(sessionId) {
+  if (!sessionId) return null;
+  if (zcodeMetaCache.has(sessionId)) return zcodeMetaCache.get(sessionId);
+  let meta = null;
+  try {
+    if (existsSync(ZCODE_DB)) {
+      // 用 .parameter 绑定，避免会话 ID 里的连字符被当成 SQL 语法
+      const out = execFileSync('sqlite3', [
+        ZCODE_DB,
+        '.parameter init',
+        '.parameter set @sid ' + sessionId,
+        'SELECT title, directory FROM session WHERE id = @sid',
+      ], { encoding: 'utf8', timeout: 3000 });
+      const [titleRaw, dirRaw] = out.split('|');
+      const title = titleRaw?.trim();
+      const directory = dirRaw?.trim();
+      if (title || directory) meta = { title: title || null, directory: directory || null };
+    }
+  } catch {}
+  // 只缓存成功结果；失败不缓存（下次再试）
+  if (meta) zcodeMetaCache.set(sessionId, meta);
+  if (zcodeMetaCache.size > 500) zcodeMetaCache.clear(); // 防膨胀
+  return meta;
+}
+
 /** POST /api/hooks/:provider — 统一 hook 接收入口 */
 router.post('/hooks/:provider', async (req, res) => {
   const { provider } = req.params;
   const payload = req.body || {};
   const rawEvent = getEventName(payload);
+
+  // 调试：打印原始 payload 字段结构（仅字段名，不含值，防敏感泄露）
+  if (process.env.AW_DEBUG_PAYLOAD) {
+    const keys = Object.keys(payload);
+    const sub = {};
+    for (const k of keys) {
+      const v = payload[k];
+      sub[k] = Array.isArray(v) ? `Array(${v.length})` : typeof v === 'object' && v ? `Object{${Object.keys(v).slice(0, 6).join(',')}}` : typeof v;
+    }
+    console.log(`[ingest-debug] ${provider} rawEvent=${rawEvent}`, JSON.stringify(sub));
+  }
 
   try {
     const adapter = await getAdapter(provider);
@@ -48,8 +91,21 @@ export function applyEvent(ev) {
   if (ev.cwd) {
     patch.cwd = ev.cwd;
     if (!s.project) patch.project = projectFromCwd(ev.cwd);
+  } else if (!s.cwd && ev.provider === 'zcode') {
+    // ZCode 部分事件（如 Stop）payload 可能不带 cwd → 从官方 db 回查补齐
+    // （会话创建时若缺 cwd，前端会归到"未知项目"，补上后自动迁移）
+    const meta = zcodeSessionMeta(ev.sessionId);
+    if (meta?.directory) {
+      patch.cwd = meta.directory;
+      if (!s.project) patch.project = projectFromCwd(meta.directory);
+    }
   }
   if (ev.title && !s.title) patch.title = ev.title;
+  else if (!s.title && ev.provider === 'zcode') {
+    // title 缺失同理从 db 补（db 有 ai 生成的会话标题，比空着强）
+    const meta = zcodeSessionMeta(ev.sessionId);
+    if (meta?.title) patch.title = meta.title;
+  }
   if (ev.mode) patch.mode = ev.mode;
   if (ev.lastMessage) patch.lastMessage = ev.lastMessage;
 
