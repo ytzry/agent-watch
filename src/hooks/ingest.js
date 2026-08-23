@@ -5,6 +5,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { hub, STATES } from '../hub.js';
 import { EVENTS, getAdapter, listAdapters, getEventName } from '../adapters/index.js';
+import { findSessionFile, parseZCodeRollout, parseClaudeTranscript, parseCodexRollout, parseTodoTail, computeUsage } from '../session-files.js';
 /**
  * 从 cwd 推断项目名：向上找 .git 目录，取仓库名；没有则取 basename。
  * 注意：hook 运行时拿 cwd 即可，不必读磁盘（避免 hook 阻塞）。这里做纯路径推断。
@@ -108,6 +109,46 @@ export function applyEvent(ev) {
   }
   if (ev.mode) patch.mode = ev.mode;
   if (ev.lastMessage) patch.lastMessage = ev.lastMessage;
+
+  // hook 触发时同步读本地会话文件，即时刷新上下文用量 / 缓存命中率 / 标题 / todo。
+  // 数据以文件为准（比 hook payload 完整：payload 不含 usage），读取必须快速且容错。
+  // 用 setImmediate 异步合并：hook 响应先回（不阻塞 agent 调用方），解析结果随后广播。
+  if (ev.event === EVENTS.STOP || ev.event === EVENTS.PROMPT || ev.event === EVENTS.ASK_USER || ev.event === EVENTS.PERMISSION_REQUEST) {
+    const provider = ev.provider;
+    const sessionId = ev.sessionId;
+    const cwd = patch.cwd || ev.cwd || s.cwd;
+    setImmediate(() => {
+      try {
+        const filePath = findSessionFile(sessionId, provider, cwd);
+        if (!filePath) return; // 无 rollout 文件（非模型会话）→ 跳过
+        // parseZCodeRollout 直接返回 usage 对象；Claude/Codex 解析器返回 { usage, ... }
+        let result = null;
+        let usage = null;
+        if (provider === 'zcode') usage = parseZCodeRollout(filePath, sessionId);
+        else if (provider === 'claude-code') {
+          result = parseClaudeTranscript(filePath, sessionId);
+          usage = result?.usage;
+        } else if (provider === 'codex') {
+          result = parseCodexRollout(filePath, sessionId);
+          usage = result?.usage;
+        }
+        if (!usage) return;
+        const patch2 = {};
+        const usage2 = computeUsage(usage);
+        if (usage2) patch2.usage = usage2;
+        // 标题：ai-title > 首条 user prompt；都没有保留现有（hook payload 里的标题已覆盖）
+        if (result?.aiTitle) patch2.title = result.aiTitle;
+        else if (result?.firstPrompt && !hub.sessions.get(sessionId)?.title) patch2.title = result.firstPrompt;
+        if (result?.lastMessage) patch2.lastMessage = result.lastMessage;
+        // todo：hook payload 无 todo 时从文件补（TodoWrite 的 tool_input 落盘在 rollout）
+        if (provider === 'zcode' && !ev.todo) {
+          const todo = parseTodoTail(filePath);
+          if (todo) patch2.todo = todo;
+        }
+        if (Object.keys(patch2).length) hub.update(sessionId, patch2);
+      } catch (err) { console.error('[ingest] file sync error:', err); }
+    });
+  }
 
   switch (ev.event) {
     case EVENTS.SESSION_START:
