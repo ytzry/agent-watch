@@ -281,7 +281,7 @@
         </o-fill>
       </div>
       <div class="usage" class:hidden="!hasUsage">
-        <div class="usage-bar" :style.width="usage.pct + '%'"></div>
+        <div class="usage-bar" :style.width="(usage && usage.pct != null ? usage.pct : 0) + '%'"></div>
       </div>
       <div class="usage-text" class:hidden="!hasUsage">
         <i class="aw-ic" data-lucide="gauge"></i>{{usageText}}<span class:hidden="!cacheHitText"> · 缓存 {{cacheHitText}}</span>
