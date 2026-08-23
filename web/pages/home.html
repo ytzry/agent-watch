@@ -26,7 +26,7 @@
       display: flex;
       align-items: center;
       gap: 14px;
-      margin-bottom: 0;
+      margin-bottom: 0.6rem;
       position: relative;
       background: hsl(var(--background) / 0.92);
       backdrop-filter: blur(8px);
@@ -215,12 +215,12 @@
       .counts { gap: 14px; }
       .group { margin-bottom: 0.8rem; }
     }
-    /* 2) 强制横屏（竖持手机点按钮）：宿主固定 + 旋转 90°，位置由 JS 精确设置（居中无截断） */
+    /* 2) 强制横屏（竖持手机点按钮）：宿主固定 + 旋转 90°，位置由 JS 精确设置（居中无截断）。
+       注意：rotate 与 transform-origin 由 JS 内联写入（_applyRotate），不依赖伪类——
+       全屏态下浏览器可能对 :host 伪类规则匹配不稳定，内联样式保证真机旋转一定生效 */
     :host([data-force-landscape]) {
       position: fixed;
       margin: 0;
-      transform: rotate(90deg);
-      transform-origin: top left;
       display: block;
       overflow: hidden;
     }
@@ -354,8 +354,8 @@
             if (!h) return;
             const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
             if (inFs) {
-              // 进入全屏：竖屏设备需补上旋转横屏；物理横屏直接用原生横屏布局
-              if (window.innerHeight > window.innerWidth) {
+              // 进入全屏：仅小屏竖屏设备自动补旋转横屏；大屏/物理横屏直接用原生布局
+              if (this._isSmallScreen() && window.innerHeight > window.innerWidth) {
                 h.setAttribute('data-force-landscape', '');
                 this.fsIcon = 'minimize';
                 this._applyRotate(h);
@@ -364,6 +364,7 @@
               // 退出全屏（ESC / API）：同步清理强制横屏
               h.removeAttribute('data-force-landscape');
               this._resetRotate(h);
+              document.body.style.overflow = '';
               this.fsIcon = 'maximize';
             }
             // 全屏尺寸变化后重算宿主高度（非旋转态）
@@ -372,6 +373,30 @@
           };
           document.addEventListener('fullscreenchange', this._fsChangeHandler);
           document.addEventListener('webkitfullscreenchange', this._fsChangeHandler);
+          // 物理转屏（手机横放/竖放）：旋转态下若变为物理横屏，清理残留旋转避免方向错乱；
+          // 物理竖屏时若正处于全屏，自动补齐旋转
+          this._orientationHandler = () => {
+            const h = document.querySelector('o-page');
+            if (!h) return;
+            if (h.hasAttribute('data-force-landscape') && window.innerWidth > window.innerHeight) {
+              h.removeAttribute('data-force-landscape');
+              this._resetRotate(h);
+              this.fsIcon = 'maximize';
+            } else if (this._isSmallScreen() &&
+                       (document.fullscreenElement || document.webkitFullscreenElement) &&
+                       window.innerHeight > window.innerWidth) {
+              h.setAttribute('data-force-landscape', '');
+              this.fsIcon = 'minimize';
+              this._applyRotate(h);
+            }
+            if (this._fixHeight) this._fixHeight();
+            try { createIcons(); } catch {}
+          };
+          if (screen.orientation?.addEventListener) {
+            screen.orientation.addEventListener('change', this._orientationHandler);
+          } else {
+            window.addEventListener('orientationchange', this._orientationHandler);
+          }
           // 锁定宿主高度 = 视口高（保证 header 固定 + 列表区滚动，不随内容撑开）
           // 旋转态下由 CSS :host([data-force-landscape]) 管理 fixed + 旋转，这里重算旋转尺寸
           const fixHeight = () => {
@@ -421,6 +446,13 @@
             document.removeEventListener('fullscreenchange', this._fsChangeHandler);
             document.removeEventListener('webkitfullscreenchange', this._fsChangeHandler);
           }
+          if (this._orientationHandler) {
+            if (screen.orientation?.removeEventListener) {
+              screen.orientation.removeEventListener('change', this._orientationHandler);
+            } else {
+              window.removeEventListener('orientationchange', this._orientationHandler);
+            }
+          }
         },
         ready() {
           // 深度扫描（含 shadow DOM）替换 data-lucide 占位；延时兜底确保渲染完成
@@ -431,6 +463,10 @@
           } catch {}
         },
         proto: {
+          /** 小屏判定：手机尺寸（任一边 < 600px）。大屏竖屏（平板/桌面窄窗）全屏不自动旋转 */
+          _isSmallScreen() {
+            return Math.min(window.innerWidth, window.innerHeight) < 600;
+          },
           applySnapshot(snap) {
             if (!snap) return;
             this.groups = snap.groups || [];
@@ -442,13 +478,16 @@
             this.runningCount = c.running || 0;
             this.idleCount = c.idle || 0;
           },
-          /** 竖屏旋转尺寸定位：宿主宽=视口高、高=视口宽，rotate(90deg) 后视觉居中 */
+          /** 竖屏旋转尺寸定位：宿主宽=视口高、高=视口宽，rotate(90deg) 后视觉居中。
+           *  transform 内联写入而非依赖 CSS 伪类，保证全屏态下旋转一定生效 */
           _applyRotate(host) {
             const vw = window.innerWidth, vh = window.innerHeight;
             host.style.width = vh + 'px';
             host.style.height = vw + 'px';
             host.style.left = vw + 'px';
             host.style.top = '0px';
+            host.style.transform = 'rotate(90deg)';
+            host.style.transformOrigin = 'top left';
             const page = host.shadowRoot?.querySelector('.page');
             if (page) {
               page.style.width = vh + 'px';
@@ -462,22 +501,44 @@
             host.style.left = '';
             host.style.top = '';
             host.style.width = '';
+            host.style.transform = '';
+            host.style.transformOrigin = '';
             host.style.height = window.innerHeight + 'px';
             host.style.removeProperty('--landscape-cols');
             const page = host.shadowRoot?.querySelector('.page');
             if (page) { page.style.width = ''; page.style.height = ''; }
           },
-          /** 强制横屏切换：优先调用浏览器全屏 API（类似视频播放器全屏播放），
-           *  竖屏设备配合 90° 旋转实现横屏；不支持全屏 API（如 iOS Safari）时降级为纯旋转 */
+          /** 强制横屏切换：业内标准做法是 全屏 API + screen.orientation.lock('landscape')，
+           *  移动端竖屏物理锁横屏（系统 UI 跟着转，内容无需 transform）；
+           *  方向锁不可用（桌面/旧 iOS/被拒）时降级为 transform 旋转 90° 模拟横屏。
+           *  物理横屏（桌面/手机横放）点击只进全屏，不旋转——本身就是横屏。 */
           toggleLandscape() {
             const host = document.querySelector('o-page');
             if (!host) return;
-            const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-            if (inFs) {
-              // 已在全屏：退出全屏（fullscreenchange 回调负责清理旋转态）
+            // 已在旋转态：清理旋转；若同时在全屏则一并退出（fullscreenchange 会兜底清理）
+            if (host.hasAttribute('data-force-landscape')) {
+              host.removeAttribute('data-force-landscape');
+              this._resetRotate(host);
+              this.fsIcon = 'maximize';
+              document.body.style.overflow = '';
               this._exitFullscreen();
+              if (this._fixHeight) this._fixHeight();
+              try { createIcons(); } catch {}
               return;
             }
+            // 物理横屏：点击只进全屏（已横屏无需旋转），保持原生布局
+            if (window.innerWidth > window.innerHeight) {
+              const enterPlain = async () => {
+                try {
+                  if (host.requestFullscreen) await host.requestFullscreen();
+                  else if (host.webkitRequestFullscreen) await host.webkitRequestFullscreen();
+                } catch {}
+              };
+              enterPlain();
+              return;
+            }
+            // 物理竖屏：先全屏，再尝试原生方向锁（移动端首选，桌面/不支持时 reject）；
+            // 方向锁成功物理已横屏，无需 transform；失败降级为 transform 旋转模拟横屏
             const enterFs = async () => {
               try {
                 if (host.requestFullscreen) {
@@ -486,6 +547,27 @@
                   await host.webkitRequestFullscreen();
                 } else {
                   throw new Error('no fullscreen api');
+                }
+                if (!(document.fullscreenElement || document.webkitFullscreenElement)) {
+                  throw new Error('fullscreen not entered');
+                }
+                // 已进入全屏：尝试原生方向锁（移动端首选，桌面/不支持时 reject）
+                let locked = false;
+                try {
+                  if (screen.orientation?.lock) {
+                    await screen.orientation.lock('landscape');
+                    locked = true;
+                  }
+                } catch { locked = false; }
+                if (locked) {
+                  // 物理已锁横屏：原生横屏布局，无需 transform
+                  this.fsIcon = 'minimize';
+                  if (this._fixHeight) this._fixHeight();
+                } else {
+                  // 方向锁不可用：transform 旋转模拟横屏
+                  host.setAttribute('data-force-landscape', '');
+                  this.fsIcon = 'minimize';
+                  this._applyRotate(host);
                 }
               } catch {
                 this._enterRotateOnly(host);
@@ -502,6 +584,8 @@
           },
           _exitFullscreen() {
             try {
+              // 解锁方向锁（若已通过 orientation.lock 锁横屏），恢复系统默认方向
+              if (screen.orientation?.unlock) screen.orientation.unlock();
               if (document.exitFullscreen) document.exitFullscreen();
               else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
             } catch {}
