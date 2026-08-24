@@ -5,9 +5,10 @@
  *   hooks: {
  *     enabled: true,
  *     events: {
- *       "<Event>": [ { matcher?, hooks: [ { type:"command", command:"curl ... -d @-", timeout } ] } ]
+ *       "<Event>": [ { matcher?, hooks: [ { type:"command", command:"curl -s --json @- http://127.0.0.1:<port>/api/hooks/zcode", timeout } ] } ]
  *     }
  *   }
+ *   （Windows 上 hook 经 cmd.exe 跑命令，curl 用 --json @- 读 stdin，避免引号/header 被拆坏）
  *
  * 事件白名单（app.asar 源码验证）：SessionStart, UserPromptSubmit, PreToolUse,
  * PermissionRequest, PostToolUse, PostToolUseFailure, Stop

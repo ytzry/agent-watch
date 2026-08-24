@@ -3,7 +3,7 @@
  *
  * Hook 配置（~/.codex/config.toml）：
  *   [hooks]
- *   PreToolUse = [ { matcher = "Bash", hooks = [ { type="command", command="curl ... -d @-", timeout=30 } ] } ]
+ *   PreToolUse = [ { matcher = "Bash", hooks = [ { type="command", command="curl -s --json @- http://127.0.0.1:<port>/api/hooks/codex", timeout=30 } ] } ]
  *   ...
  *
  * 事件（源码验证 11 个）：SessionStart, UserPromptSubmit, PreToolUse, PostToolUse,

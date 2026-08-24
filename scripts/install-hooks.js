@@ -32,7 +32,11 @@ function backup(filePath) {
 }
 
 function curlCommand(url) {
-  return `curl -s -X POST ${BASE}${url} -H 'Content-Type: application/json' -d @-`;
+  // --json @-：curl ≥7.82，自动设 Content-Type: application/json 并 POST。
+  // 不用 -H '...'：Windows 上 command hook 经 cmd.exe 执行，单引号按字面拆分、
+  // 双引号也可能带引号原样传给 curl，导致非法 header（服务端 400），
+  // 且 `application/json'` 会被当成额外 URL 触发 DNS 失败（curl exit 6 → hook 全挂）。
+  return `curl -s --json @- ${BASE}${url}`;
 }
 
 /* ---------- Claude Code ---------- */
