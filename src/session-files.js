@@ -244,7 +244,12 @@ function firstUserPromptFromBody(body) {
 }
 
 /** 解析 ZCode rollout JSONL，提取 usage 和 max_tokens（只读文件尾部，避免大文件 OOM）。
- *  返回 { usage, firstPrompt }（与 Claude/Codex 解析器同为整对象，title 由 db 提供）。 */
+ *  返回 { usage, firstPrompt, replyState }（与 Claude/Codex 解析器同为整对象，title 由 db 提供）。
+ *  replyState：'done' | 'running' | null —— 依据**最后一条** model_io 记录判定：
+ *  - finishReason=stop 且无工具调用 → done（本轮回复完成，等用户输入）
+ *  - 有工具调用（toolCalls 非空）→ running（模型在调工具干活）
+ *  - 有 error 字段 / 无标记 → null（失败或不可判定，交给 hook 事件）
+ *  AskUserQuestion 不进 model_io（rollout 只记模型 I/O），"等待回复"由 PermissionRequest hook 标。 */
 export function parseZCodeRollout(filePath, sessionId) {
   try {
     const size = statSync(filePath).size;
@@ -258,6 +263,7 @@ export function parseZCodeRollout(filePath, sessionId) {
     let last = null;
     let modelId = '';
     let firstPrompt = '';
+    let replyState = null;
     // 缓存命中率统计（当前会话，最近 readLen 内所有请求）
     let sumInput = 0, sumCacheRead = 0, sumCacheCreate = 0;
     // firstPrompt 是文件开头的首条请求；只有当整个文件都在读窗内（<=512KB）时才能取到
@@ -265,6 +271,16 @@ export function parseZCodeRollout(filePath, sessionId) {
     for (const line of lines) {
       try {
         const obj = JSON.parse(line);
+        if (obj.type === 'model_io' && obj.response) {
+          // 只看有响应的记录；请求失败（error 字段）不可判定，跳过
+          if (!obj.error && Array.isArray(obj.response.toolCalls)) {
+            if (obj.response.finishReason === 'stop' && obj.response.toolCalls.length === 0) {
+              replyState = 'done';
+            } else if (obj.response.toolCalls.length > 0) {
+              replyState = 'running';
+            }
+          }
+        }
         // usage 嵌套在 response 里（也可能是顶层，防御两种）
         const u = obj.usage || obj.response?.usage;
         // 取最后一条"有实际上下文"的 usage（跳过空记录）
@@ -302,8 +318,8 @@ export function parseZCodeRollout(filePath, sessionId) {
       // 不取整：保留原始比值，由前端决定展示精度（取整会把 99.9% 显示成 100%）
       cacheHitRate: hitDenom > 0 ? sumCacheRead / hitDenom : null,
     } : null;
-    if (!usage && !firstPrompt) return null;
-    return { usage, firstPrompt: firstPrompt || null };
+    if (!usage && !firstPrompt && !replyState) return null;
+    return { usage, firstPrompt: firstPrompt || null, replyState };
   } catch {
     return null;
   }

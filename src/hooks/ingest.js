@@ -144,6 +144,8 @@ export function applyEvent(ev) {
           if (todo) patch2.todo = todo;
         }
         if (Object.keys(patch2).length) hub.update(sessionId, patch2);
+        // 状态：按最后一条 model_io 的回复状态收敛（AI 回复完成 → idle；有工具调用 → running）
+        if (result.replyState) hub.applyReplyState(sessionId, result.replyState);
       } catch (err) { console.error('[ingest] file sync error:', err); }
     });
   }
@@ -193,6 +195,7 @@ export function applyEvent(ev) {
         ...patch,
         lastTool: ev.toolName || s.lastTool,
         state: STATES.WAITING_INPUT,
+        waitingForInput: true, // 真等待（模型提问等用户），文件信号不得覆盖
       }, { stateChangedBy: 'ask_user' });
       break;
 

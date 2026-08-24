@@ -59,6 +59,7 @@ class Hub extends EventEmitter {
         cwd: '',
         mode: null, // 归一化回复模式：ask/auto/plan/acceptEdits/bypass/未知原值
         state: STATES.CREATED,
+        waitingForInput: false, // AskUserQuestion 提问后置 true（文件信号不得覆盖该等待）
         todo: [],
         lastMessage: '',
         lastTool: null,
@@ -104,6 +105,33 @@ class Hub extends EventEmitter {
     const s = this.sessions.get(sessionId);
     if (!s || s.state === STATES.ENDED) return;
     this.update(sessionId, { state: STATES.ENDED, endedAt: Date.now() }, { stateChangedBy: reason });
+  }
+
+  /**
+   * 根据文件解析出的"回复状态"归一化为会话状态。
+   * 只把 running / waiting_input（且非 AskUserQuestion 真等待）收敛为 idle；
+   * 询问/审批/错误/后台任务等主动状态一律不覆盖（它们是 hook 事件的权威结论）。
+   * 真等待（waitingForInput=true，AskUserQuestion 提问后）不会被文件信号覆盖——
+   * 文件无法表达"模型在等用户"，只有 hook 的 ask_user 事件能标这个状态。
+   */
+  applyReplyState(sessionId, replyState) {
+    if (!replyState) return;
+    const s = this.sessions.get(sessionId);
+    if (!s || s.state === STATES.ENDED) return;
+    if (replyState === 'done') {
+      // 回复完成：created/running → idle；兜底等待（非 ask）→ idle；真等待/审批/错误等保持
+      if (s.state === STATES.CREATED || s.state === STATES.RUNNING ||
+          (s.state === STATES.WAITING_INPUT && !s.waitingForInput)) {
+        this.update(sessionId, { state: STATES.IDLE }, { stateChangedBy: 'reply_done' });
+      }
+      return;
+    }
+    // 'running'：文件显示有工具调用待执行 → 会话在干活。
+    // 仅提升 created（初始态）与兜底等待；不打断 idle（AI 已完成回复后文件可能短暂显示旧状态），
+    // 也不覆盖 AskUserQuestion 真等待
+    if (s.state === STATES.CREATED || (s.state === STATES.WAITING_INPUT && !s.waitingForInput)) {
+      this.update(sessionId, { state: STATES.RUNNING }, { stateChangedBy: 'reply_running' });
+    }
   }
 
   /** 记录一次工具调用（更新最后工具 + 标题兜底） */

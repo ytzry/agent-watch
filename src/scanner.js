@@ -17,6 +17,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { hub, STATES } from './hub.js';
+import { parseZCodeRollout as parseZCodeRolloutFile } from './session-files.js';
 import { projectFromCwd } from './hooks/ingest.js';
 
 // 只回显最近 5 分钟内有活动的会话（= 当前正在跑的任务；更早的一律视为历史，不回显）
@@ -263,7 +264,7 @@ function scanZCode() {
           const mtime = statSync(path.join(rolloutDir, f)).mtimeMs;
           // 只回显最近 ACTIVE_WINDOW_MS 有活动的（= 正在跑的任务）；更早的一律视为历史
           if (Date.now() - mtime > ACTIVE_WINDOW_MS) continue;
-          candidates.push({ sessionId: sid, mtime });
+          candidates.push({ sessionId: sid, mtime, filePath: path.join(rolloutDir, f) });
         }
       }
       if (!candidates.length) return [];
@@ -278,15 +279,18 @@ function scanZCode() {
       for (const c of candidates) {
         const row = byId.get(c.sessionId);
         // 找不到 db 记录也回显（rollout 文件存在 = 干过活）；db 兜底拿不到标题则留空
+        // 状态按最后一条 model_io 的回复状态判定（done → idle，有工具调用 → running），
+        // 而不是一律 waiting_input——AI 回复完成的会话不该显示"等待回复"
+        const parsed = parseZCodeRolloutFile(c.filePath, c.sessionId);
+        const replyState = parsed?.replyState;
+        const state = replyState === 'done' ? STATES.IDLE : replyState === 'running' ? STATES.RUNNING : STATES.WAITING_INPUT;
         found.push({
           provider: 'zcode',
           sessionId: c.sessionId,
           cwd: row?.directory || '',
           title: row?.title || '',
-          lastMessage: '',
-          // 扫描只能确认"会话存在"，不能确定是否执行中（长时间任务无更新时间差）
-          // 状态标 waiting_input（等输入/活动），由 hook 事件精确更新为 running/其他
-          state: 'waiting_input',
+          lastMessage: parsed?.lastMessage || '',
+          state,
           updatedAt: new Date(c.mtime).toISOString(),
         });
       }
