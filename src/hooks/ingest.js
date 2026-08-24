@@ -196,10 +196,16 @@ export function applyEvent(ev) {
       break;
 
     case EVENTS.STOP: {
+      // 手动停止（用户点停止按钮 / Esc）会触发 Stop 事件。
+      // 有后台任务（定时器/后台进程）→ 会话转为后台任务；否则本次工作已结束。
+      // ZCode 无 SessionEnd hook，这里就是会话终止的最终信号，不能标 idle——
+      // idle 的语义是"AI 正常回复完成"，前端展示为"已完成"，而手动停止后
+      // tailer 的存活探测会把它改成 ended，中间会有一段时间状态不一致。
       const bg = ev.hasBackground;
       hub.update(ev.sessionId, {
         ...patch,
-        state: bg ? STATES.BACKGROUND_TASK : STATES.IDLE,
+        state: bg ? STATES.BACKGROUND_TASK : STATES.ENDED,
+        endedAt: Date.now(),
       }, { stateChangedBy: bg ? 'background_task' : 'stop' });
       break;
     }

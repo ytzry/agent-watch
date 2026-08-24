@@ -178,31 +178,6 @@ class Hub extends EventEmitter {
   recentEvents(n = 50) {
     return this.events.slice(-n);
   }
-
-  /**
-   * 陈旧会话清扫：超过 staleMs 无任何更新 → ended（防幽灵会话）。
-   *
-   * 边界规则：
-   * - waiting_input / awaiting_approval 是"等用户"状态，可长期挂着，但 agent 进程
-   *   可能已退出且没有 SessionEnd hook（ZCode 白名单无此事件）→ 给一个长上限
-   *   （staleWaitMs，默认 12h），超过即结束，避免审批卡住的幽灵会话永久挂着
-   * - background_task 可以长时间不更新（后台定时任务）→ 给中间上限（staleBgMs，
-   *   默认 4h）
-   * - 其余状态（running/idle/compacting/error…）默认 30 分钟无更新 → ended
-   */
-  staleSweep(staleMs = 30 * 60 * 1000, staleWaitMs = 12 * 3600 * 1000, staleBgMs = 4 * 3600 * 1000) {
-    const now = Date.now();
-    for (const s of this.sessions.values()) {
-      if (s.state === STATES.ENDED) continue;
-      const idleSince = now - s.updatedAt;
-      let limit = staleMs;
-      if (s.state === STATES.AWAITING_APPROVAL || s.state === STATES.WAITING_INPUT) limit = staleWaitMs;
-      else if (s.state === STATES.BACKGROUND_TASK) limit = staleBgMs;
-      if (idleSince > limit) {
-        this.update(s.id, { state: STATES.ENDED, endedAt: now }, { stateChangedBy: 'stale_sweep' });
-      }
-    }
-  }
 }
 
 export const hub = new Hub();

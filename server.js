@@ -47,6 +47,5 @@ server.listen(config.port, config.host, () => {
   console.log(`[agent-watch] 已注册适配器: ${listAdapters().join(', ')}`);
   // 启动时扫描回显活跃会话（服务重启 / 启动前就在跑的会话）
   scanAndRestore();
-  // 陈旧会话清扫（30 分钟无更新的 running/idle → ended）
-  setInterval(() => hub.staleSweep(), 5 * 60 * 1000);
+  // 会话状态完全由 hook 事件驱动（Stop / SessionEnd / StopFailure），不做时间清扫
 });

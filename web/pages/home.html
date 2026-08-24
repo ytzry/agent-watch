@@ -419,6 +419,7 @@
             } else if (msg.type === 'state_change') {
               // 声音播报：进入某状态时按设置播放
               notifyState(msg.session.state);
+              // ws-client 已把增量写进本地快照（updateSessionInSnapshot），直接应用
               this.applySnapshot(getSnapshot());
             } else if (msg.type === 'updated' || msg.type === 'session_update') {
               this.applySnapshot(getSnapshot());
