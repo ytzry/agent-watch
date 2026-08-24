@@ -5,7 +5,9 @@
  * - Claude Code: ~/.claude/projects 下最近写入的 transcript（文件 mtime = 真实对话活动；
  *                打开了但没对话的交互进程没有 jsonl，天然不会误报成任务）
  * - Codex:       ~/.codex/state_5.sqlite 的 threads 表（官方会话索引）
- * - ZCode:       ~/.zcode/cli/db/db.sqlite 的 session 表
+ * - ZCode:       ~/.zcode/cli/rollout 下最近写入的 rollout 文件
+ *                （db 的 time_updated 打开会话就会刷新，会误报"从未对话"的会话；
+ *                 rollout 文件只有真正产生过模型 I/O 的会话才有）
  *
  * 回显的会话仅靠扫描无法确定"是否正在执行"，统一标 waiting_input，
  * 由后续 hook 事件精确更新为 running / 其他状态。
@@ -236,33 +238,56 @@ function scanCodexFallback() {
   return found;
 }
 
-/** 扫描 ZCode 会话：读官方 db.sqlite 的 session 表（id/title/directory/time_updated/time_archived） */
+/** 扫描 ZCode 会话：db 会话索引 + rollout 文件存在性/mtime 双重判定
+ *
+ * 为什么不能只看 db：ZCode 打开一个会话（未发任何消息）也会刷新 time_updated，
+ * 若按 db 时间判活跃，面板会回显"从未对话"的会话（误报）。
+ * 因此以 rollout 文件为准——只有真正产生过模型 I/O（= 干过活）的会话才有文件。
+ * 再结合 mtime 判活跃窗口：只回显最近 ACTIVE_WINDOW_MS 内有活动的（= 正在跑/刚跑完）。
+ */
 function scanZCode() {
   const dbPath = expandHome('~/.zcode/cli/db/db.sqlite');
   if (!existsSync(dbPath)) return [];
   try {
     const db = new DatabaseSync(dbPath);
     try {
+      // 先扫 rollout 目录，拿"真正干过活"的会话候选（子代理除外）
+      const rolloutDir = expandHome('~/.zcode/cli/rollout');
+      const candidates = [];
+      if (existsSync(rolloutDir)) {
+        for (const f of readdirSync(rolloutDir)) {
+          const m = f.match(/^model-io-sess_(.+)\.jsonl$/);
+          if (!m) continue;
+          const sid = 'sess_' + m[1];
+          if (sid.includes('subagent')) continue; // 子代理不单独回显
+          const mtime = statSync(path.join(rolloutDir, f)).mtimeMs;
+          // 只回显最近 ACTIVE_WINDOW_MS 有活动的（= 正在跑的任务）；更早的一律视为历史
+          if (Date.now() - mtime > ACTIVE_WINDOW_MS) continue;
+          candidates.push({ sessionId: sid, mtime });
+        }
+      }
+      if (!candidates.length) return [];
+      // 从 db 批量取候选会话的标题/cwd（用占位符批量查询，避免逐条往返）
+      const ids = candidates.map((c) => c.sessionId);
+      const placeholders = ids.map(() => '?').join(',');
       const rows = db
-        .prepare('SELECT id, title, directory, time_updated, time_archived FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC')
-        .all();
+        .prepare(`SELECT id, title, directory FROM session WHERE id IN (${placeholders})`)
+        .all(...ids);
+      const byId = new Map(rows.map((r) => [r.id, r]));
       const found = [];
-      for (const row of rows) {
-        const updated = Number(row.time_updated || 0);
-        // 只回显最近 ACTIVE_WINDOW_MS 有活动的（= 正在跑的任务）；更早的一律视为历史
-        if (Date.now() - updated > ACTIVE_WINDOW_MS) continue;
-        // 跳过子代理（parent_id 关联，主会话才有意义）
-        if (row.id.includes('subagent')) continue;
-        // 扫描只能确认"会话存在"，不能确定是否执行中（长时间任务无更新时间差）
-        // 状态标 waiting_input（等输入/活动），由 hook 事件精确更新为 running/其他
+      for (const c of candidates) {
+        const row = byId.get(c.sessionId);
+        // 找不到 db 记录也回显（rollout 文件存在 = 干过活）；db 兜底拿不到标题则留空
         found.push({
           provider: 'zcode',
-          sessionId: row.id,
-          cwd: row.directory || '',
-          title: row.title || '',
+          sessionId: c.sessionId,
+          cwd: row?.directory || '',
+          title: row?.title || '',
           lastMessage: '',
+          // 扫描只能确认"会话存在"，不能确定是否执行中（长时间任务无更新时间差）
+          // 状态标 waiting_input（等输入/活动），由 hook 事件精确更新为 running/其他
           state: 'waiting_input',
-          updatedAt: new Date(updated).toISOString(),
+          updatedAt: new Date(c.mtime).toISOString(),
         });
       }
       return found;

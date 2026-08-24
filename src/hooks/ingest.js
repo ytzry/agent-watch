@@ -150,9 +150,11 @@ export function applyEvent(ev) {
 
   switch (ev.event) {
     case EVENTS.SESSION_START:
-      // 会话开始（可能 resume/compact）→ waiting（坐在提示符等输入），有活动后转 running
-      hub.update(ev.sessionId, { ...patch, state: STATES.WAITING_INPUT }, { stateChangedBy: 'session_start' });
-      break;
+      // 会话开始/打开 → **不创建会话**。原因：ZCode 打开一个未发消息的会话也会触发
+      // SessionStart，若在这里创建卡片，面板上就会出现"从未对话"的会话（误报）。
+      // 只有真实活动（UserPromptSubmit / 工具调用等）才创建卡片。
+      // 若会话已存在（resume 或扫描回显过）→ 保持原状态不变（打开会话不算活动，不重置 waiting_input）。
+      return;
 
     case EVENTS.PROMPT:
       hub.update(ev.sessionId, {
