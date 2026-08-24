@@ -199,15 +199,21 @@ function recount(groups) {
   return c;
 }
 
-/** 组排序：组内按 updatedAt 降序；组间按「组内最近活动」（最大 updatedAt）降序，
- * 与后端 groupByProject 口径一致 —— 有动作的项目自动排前面 */
+/** 组排序：组内按最近活动降序；组间按「组内最近活动」（最大 lastActivityAt）降序，
+ * 与后端 groupByProject 口径一致 —— 有动作的项目自动排前面。
+ * lastActivityAt 只由 hook 对话事件刷新（usage/tailer 轮询不刷新），
+ * 避免正在跑的会话被轮询刷 updatedAt 而霸占组首 */
 function sortGroups(groups) {
   for (const g of groups) {
-    g.sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-    g.activityAt = g.sessions.reduce((m, s) => Math.max(m, s.updatedAt), 0);
+    g.sessions.sort((a, b) => activityTime(b) - activityTime(a));
+    g.activityAt = g.sessions.reduce((m, s) => Math.max(m, activityTime(s)), 0);
   }
   groups.sort((a, b) => b.activityAt - a.activityAt);
   return groups;
+}
+
+function activityTime(s) {
+  return s.lastActivityAt || s.updatedAt || 0;
 }
 
 function updateSessionInSnapshot(session) {

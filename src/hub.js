@@ -66,6 +66,10 @@ class Hub extends EventEmitter {
         lastEventAt: Date.now(),
         startedAt: Date.now(),
         updatedAt: Date.now(),
+        // 最近一次"对话活动"时间（hook 对话事件刷新；usage/tailer 轮询不刷新）。
+        // 排序用它而非 updatedAt——否则正在跑的会话被 tailer 每 2 秒刷 updatedAt，
+        // 永远霸占组首，刚对话完的项目反而排不上去。
+        lastActivityAt: Date.now(),
         endedAt: null,
         subagents: [], // 子代理用量快照
         usage: null, // { inputTokens, outputTokens, totalTokens, maxTokens, pct }
@@ -78,12 +82,16 @@ class Hub extends EventEmitter {
     return s;
   }
 
-  /** 更新会话字段，若状态变化则广播 event（前端据此播放声音） */
-  update(sessionId, patch, { stateChangedBy } = {}) {
+  /** 更新会话字段，若状态变化则广播 event（前端据此播放声音）
+   * @param {object} [opts.stateChangedBy] 状态变化原因（广播用）
+   * @param {boolean} [opts.activity] 是否算"对话活动"（刷新 lastActivityAt；tailer 轮询不传）
+   */
+  update(sessionId, patch, { stateChangedBy, activity } = {}) {
     const s = this.sessions.get(sessionId);
     if (!s) return null;
     const prevState = s.state;
     Object.assign(s, patch, { updatedAt: Date.now() });
+    if (activity) s.lastActivityAt = Date.now();
     const stateChanged = s.state !== prevState;
     if (stateChanged) {
       this._pushEvent({
@@ -104,7 +112,7 @@ class Hub extends EventEmitter {
   end(sessionId, reason = 'session_end') {
     const s = this.sessions.get(sessionId);
     if (!s || s.state === STATES.ENDED) return;
-    this.update(sessionId, { state: STATES.ENDED, endedAt: Date.now() }, { stateChangedBy: reason });
+    this.update(sessionId, { state: STATES.ENDED, endedAt: Date.now() }, { stateChangedBy: reason, activity: true });
   }
 
   /**
@@ -122,7 +130,10 @@ class Hub extends EventEmitter {
       // 回复完成：created/running → idle；兜底等待（非 ask）→ idle；真等待/审批/错误等保持
       if (s.state === STATES.CREATED || s.state === STATES.RUNNING ||
           (s.state === STATES.WAITING_INPUT && !s.waitingForInput)) {
-        this.update(sessionId, { state: STATES.IDLE }, { stateChangedBy: 'reply_done' });
+        // 回复完成算一次"对话活动"（模型刚答完，会话确实有动作），刷新 lastActivityAt——
+        // 否则 idle 由文件收敛（不带 activity），lastActivityAt 停在更早的 hook 事件，
+        // "刚完成回复"的项目反而排不上去
+        this.update(sessionId, { state: STATES.IDLE }, { stateChangedBy: 'reply_done', activity: true });
       }
       return;
     }
@@ -146,13 +157,17 @@ class Hub extends EventEmitter {
     this.update(sessionId, patch);
   }
 
-  /** 会话列表（按最近更新排序） */
+  /** 会话列表（按最近活动排序；无 lastActivityAt 的旧数据回退 updatedAt） */
   list() {
-    return [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...this.sessions.values()].sort((a, b) => this._activityTime(b) - this._activityTime(a));
+  }
+
+  _activityTime(s) {
+    return s.lastActivityAt || s.updatedAt || 0;
   }
 
   /** 按项目分组（供前端快照用）
-   * 组内会话按最近更新降序；组按「组内最近一次活动」（最大 updatedAt）降序 ——
+   * 组内会话按最近活动降序；组按「组内最近一次活动」（最大 lastActivityAt）降序 ——
    * 有动作的项目自动排前面。activityAt 供前端增量重排时复用（与 ws-client 排序口径一致）。
    */
   groupByProject() {
@@ -166,7 +181,7 @@ class Hub extends EventEmitter {
       .map(([project, sessions]) => ({
         project,
         sessions,
-        activityAt: sessions.reduce((m, s) => Math.max(m, s.updatedAt), 0),
+        activityAt: sessions.reduce((m, s) => Math.max(m, this._activityTime(s)), 0),
       }))
       .sort((a, b) => b.activityAt - a.activityAt);
   }
@@ -203,6 +218,7 @@ class Hub extends EventEmitter {
       subagents: s.subagents,
       startedAt: s.startedAt,
       updatedAt: s.updatedAt,
+      lastActivityAt: s.lastActivityAt || s.updatedAt,
       endedAt: s.endedAt,
     };
   }

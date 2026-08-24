@@ -350,6 +350,7 @@ export function scanAndRestore() {
       title: s.title,
       lastMessage: s.lastMessage,
       updatedAt: Date.parse(s.updatedAt) || Date.now(),
+      lastActivityAt: Date.parse(s.updatedAt) || Date.now(),
       state,
     });
     restored++;

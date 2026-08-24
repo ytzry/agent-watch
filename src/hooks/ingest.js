@@ -169,10 +169,12 @@ export function applyEvent(ev) {
       hub.update(ev.sessionId, {
         ...patch,
         state: STATES.RUNNING,
-      }, { stateChangedBy: 'prompt' });
+      }, { stateChangedBy: 'prompt', activity: true });
       break;
 
     case EVENTS.TOOL_USE:
+      // 工具调用是任务的持续动作，不算"对话活动"（否则正在跑的长会话靠工具事件
+      // 每几秒刷一次 lastActivityAt，永远霸占组首，刚对话完的项目反而排不上去）
       hub.update(ev.sessionId, {
         ...patch,
         lastTool: ev.toolName || s.lastTool,
@@ -191,7 +193,7 @@ export function applyEvent(ev) {
         ...patch,
         lastTool: ev.toolName || s.lastTool,
         state: STATES.AWAITING_APPROVAL,
-      }, { stateChangedBy: 'permission_request' });
+      }, { stateChangedBy: 'permission_request', activity: true });
       break;
 
     case EVENTS.ASK_USER:
@@ -200,10 +202,11 @@ export function applyEvent(ev) {
         lastTool: ev.toolName || s.lastTool,
         state: STATES.WAITING_INPUT,
         waitingForInput: true, // 真等待（模型提问等用户），文件信号不得覆盖
-      }, { stateChangedBy: 'ask_user' });
+      }, { stateChangedBy: 'ask_user', activity: true });
       break;
 
     case EVENTS.PRE_COMPACT:
+      // 上下文压缩是任务内部动作，不算对话活动
       hub.update(ev.sessionId, { ...patch, state: STATES.COMPACTING }, { stateChangedBy: 'pre_compact' });
       break;
 
@@ -218,20 +221,21 @@ export function applyEvent(ev) {
         ...patch,
         state: bg ? STATES.BACKGROUND_TASK : STATES.ENDED,
         endedAt: Date.now(),
-      }, { stateChangedBy: bg ? 'background_task' : 'stop' });
+      }, { stateChangedBy: bg ? 'background_task' : 'stop', activity: true });
       break;
     }
 
     case EVENTS.STOP_FAILURE:
+      // 出错是重要状态变化，算对话活动
       hub.update(ev.sessionId, {
         ...patch,
         lastTool: ev.toolName || s.lastTool,
         state: STATES.ERROR,
-      }, { stateChangedBy: 'stop_failure' });
+      }, { stateChangedBy: 'stop_failure', activity: true });
       break;
 
     case EVENTS.SUBAGENT_START:
-      // 子代理启动：会话仍 running（不打断），只记录
+      // 子代理启动：会话仍 running（不打断），只记录；子代理是任务内部动作，不算对话活动
       hub.update(ev.sessionId, { ...patch, state: STATES.RUNNING }, { stateChangedBy: 'subagent_start' });
       break;
 
@@ -244,7 +248,7 @@ export function applyEvent(ev) {
       break;
 
     default:
-      hub.update(ev.sessionId, patch);
+      hub.update(ev.sessionId, patch, { activity: true });
   }
 }
 
