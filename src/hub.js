@@ -123,7 +123,10 @@ class Hub extends EventEmitter {
     return [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  /** 按项目分组（供前端快照用） */
+  /** 按项目分组（供前端快照用）
+   * 组内会话按最近更新降序；组按「组内最近一次活动」（最大 updatedAt）降序 ——
+   * 有动作的项目自动排前面。activityAt 供前端增量重排时复用（与 ws-client 排序口径一致）。
+   */
   groupByProject() {
     const groups = new Map();
     for (const s of this.list()) {
@@ -131,7 +134,13 @@ class Hub extends EventEmitter {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(this.publicView(s));
     }
-    return [...groups.entries()].map(([project, sessions]) => ({ project, sessions }));
+    return [...groups.entries()]
+      .map(([project, sessions]) => ({
+        project,
+        sessions,
+        activityAt: sessions.reduce((m, s) => Math.max(m, s.updatedAt), 0),
+      }))
+      .sort((a, b) => b.activityAt - a.activityAt);
   }
 
   /** 对外快照（前端渲染用） */

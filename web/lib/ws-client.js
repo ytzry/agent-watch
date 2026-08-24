@@ -199,6 +199,17 @@ function recount(groups) {
   return c;
 }
 
+/** 组排序：组内按 updatedAt 降序；组间按「组内最近活动」（最大 updatedAt）降序，
+ * 与后端 groupByProject 口径一致 —— 有动作的项目自动排前面 */
+function sortGroups(groups) {
+  for (const g of groups) {
+    g.sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+    g.activityAt = g.sessions.reduce((m, s) => Math.max(m, s.updatedAt), 0);
+  }
+  groups.sort((a, b) => b.activityAt - a.activityAt);
+  return groups;
+}
+
 function updateSessionInSnapshot(session) {
   // 找到所在组并替换；找不到则创建
   // 注意：必须返回新数组引用，触发前端响应式更新
@@ -221,7 +232,7 @@ function updateSessionInSnapshot(session) {
           ng = { project, sessions: [] };
           groups.push(ng);
         }
-        ng.sessions.unshift(session);
+        ng.sessions.push(session); // 位置交给底部 sortGroups 统一排序
       } else {
         g.sessions[idx] = session;
       }
@@ -238,7 +249,7 @@ function updateSessionInSnapshot(session) {
     }
     g.sessions.unshift(session);
   }
-  snapshot = { ...snapshot, groups, counts: recount(groups) };
+  snapshot = { ...snapshot, groups: sortGroups(groups), counts: recount(groups) };
   // 触发局部刷新（页面直接读 snapshot，这里不强制重渲染，由页面 subscribe 处理）
   notify({ type: 'updated', snapshot });
 }
