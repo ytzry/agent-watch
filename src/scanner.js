@@ -132,7 +132,30 @@ function parseZCodeRollout(filePath) {
   }
 }
 
-/** 扫描 Claude Code 会话：transcript 文件的 mtime 即真实对话活动 */
+/** 从 transcript 内容提取最后一条真实对话时间戳（user/assistant 行的 timestamp，毫秒）。
+ *  mtime 会被非对话动作（打开/恢复/快照重写）刷新，内容时间戳才是真实对话活动。
+ *  返回 0 表示无对话时间戳。 */
+function lastTranscriptActivity(filePath) {
+  try {
+    const lines = readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
+    let lastTs = 0;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const o = JSON.parse(lines[i]);
+        if ((o.type === 'user' || o.type === 'assistant') && o.timestamp) {
+          const t = Date.parse(o.timestamp);
+          if (!isNaN(t) && t > lastTs) return t;
+        }
+      } catch {}
+    }
+  } catch {}
+  return lastTs;
+}
+
+/** 扫描 Claude Code 会话：transcript 文件 mtime + 内容真实对话时间戳双重判定。
+ *  为什么不能只看 mtime：Claude 打开/恢复会话、写 file-history-snapshot 都会重写文件、
+ *  刷新 mtime——内容没有新增对话，却会被误判成"正在跑的任务"（旧会话误报）。
+ *  内容时间戳（user/assistant 行）只有真实对话才会新增，作为活跃判定的权威依据。 */
 function scanClaude() {
   const root = expandHome('~/.claude/projects');
   if (!existsSync(root)) return [];
@@ -146,10 +169,15 @@ function scanClaude() {
         for (const f of files) {
           const filePath = path.join(dirPath, f);
           const mtime = statSync(filePath).mtimeMs;
-          // 只看最近 ACTIVE_WINDOW_MS 内写入过的文件（= 正在跑的任务）。
+          // 先看 mtime：最近 ACTIVE_WINDOW_MS 内写入过的文件（= 可能正在跑的任务）。
           // 不用进程 startedAt 兜底：打开了但没发过消息的交互终端没有 transcript，
           // 一旦按启动时间回显就会把"从未对话的会话"误报成任务
           if (Date.now() - mtime > ACTIVE_WINDOW_MS) continue;
+          // 再核对内容：最后一条真实对话时间戳（user/assistant 行）也必须在活跃窗口内。
+          // mtime 被刷新但内容时间戳是旧会话 → 非对话动作（打开/快照重写），跳过。
+          // 两者都满足才判定为"正在跑/刚跑完"的对话。
+          const lastActivity = lastTranscriptActivity(filePath);
+          if (Date.now() - lastActivity > ACTIVE_WINDOW_MS) continue;
           const { sessionId, lastUserText, cwd, isRunning } = parseClaudeTranscript(filePath);
           if (!sessionId) continue;
           found.push({
