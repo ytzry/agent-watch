@@ -31,12 +31,38 @@ function backup(filePath) {
   console.log(`  已备份 ${filePath} → ${BACKUP_DIR}/${name}`);
 }
 
+/**
+ * 探测本机可用的 curl 绝对路径（跨平台，换机器/系统免改）。
+ *
+ * 为什么必须绝对路径：ZCode/Codex 的 command hook 子进程继承的是宿主应用的
+ * 系统 PATH——Windows 上不含 Git Bash 的 mingw64/bin，裸 `curl` 解析不到，
+ * 导致 hook.run.failed（本仓库已踩坑，全部 hook 静默失败）。
+ *
+ * 探测顺序（Windows）：
+ *   1. C:\Windows\System32\curl.exe（系统自带，无空格，不经 shell 直接 spawn 也安全）
+ *   2. C:\Program Files\Git\mingw64\bin\curl.exe（Git 的，带引号防空格）
+ *   3. 以上都没有 → 回退裸 `curl`，靠 PATH（macOS/Linux 通常有）
+ */
+function resolveCurl() {
+  if (process.platform === 'win32') {
+    const candidates = [
+      'C:\\Windows\\System32\\curl.exe',
+      'C:\\Program Files\\Git\\mingw64\\bin\\curl.exe',
+      'C:\\Program Files\\Git\\cmd\\curl.exe',
+    ];
+    for (const c of candidates) {
+      if (existsSync(c)) return c.includes(' ') ? `"${c}"` : c;
+    }
+  }
+  return 'curl';
+}
+
 function curlCommand(url) {
   // --json @-：curl ≥7.82，自动设 Content-Type: application/json 并 POST。
   // 不用 -H '...'：Windows 上 command hook 经 cmd.exe 执行，单引号按字面拆分、
   // 双引号也可能带引号原样传给 curl，导致非法 header（服务端 400），
   // 且 `application/json'` 会被当成额外 URL 触发 DNS 失败（curl exit 6 → hook 全挂）。
-  return `curl -s --json @- ${BASE}${url}`;
+  return `${resolveCurl()} -s --json @- ${BASE}${url}`;
 }
 
 /* ---------- Claude Code ---------- */
@@ -77,7 +103,9 @@ function installCodex() {
   const lines = ['', marker, '[hooks]'];
   for (const ev of events) {
     const timeout = ev === 'SessionEnd' ? 'timeout = 2' : 'timeout = 30';
-    lines.push(`${ev} = [ { hooks = [ { type = "command", command = "${curlCommand(url)}", ${timeout} } ] } ]`);
+    // TOML 双引号字符串里反斜杠是转义符：Windows 路径 C:\... 必须写成 C:\\...
+    const cmd = curlCommand(url).replace(/\\/g, '\\\\');
+    lines.push(`${ev} = [ { hooks = [ { type = "command", command = "${cmd}", ${timeout} } ] } ]`);
   }
   // 文件可能不存在（全新安装）→ 创建；已有 agent-watch 段 → 先移除再追加（幂等）
   let content = existsSync(file) ? readFileSync(file, 'utf8') : '';
