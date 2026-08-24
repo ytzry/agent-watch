@@ -11,7 +11,7 @@
  * 由后续 hook 事件精确更新为 running / 其他状态。
  */
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { hub, STATES } from './hub.js';
@@ -170,28 +170,32 @@ function scanCodex() {
   const dbPath = expandHome('~/.codex/state_5.sqlite');
   if (!existsSync(dbPath)) return [];
   try {
-    // 用 sqlite3 CLI 查询（node 无内置 sqlite）
-    const sql = `SELECT id, title, cwd, tokens_used, archived, recency_at_ms FROM threads WHERE archived=0 ORDER BY recency_at_ms DESC`;
-    const out = execFileSync('sqlite3', [dbPath, sql], { encoding: 'utf8', timeout: 5000 });
-    const found = [];
-    const lines = out.split('\n').filter(Boolean);
-    for (const line of lines) {
-      const [id, title, cwd, tokensUsed, archived, recencyMs] = line.split('|');
-      if (!id) continue;
-      const recency = Number(recencyMs || 0);
-      // 只回显最近 ACTIVE_WINDOW_MS 有活动的（= 正在跑/刚跑完）；recency 无效则跳过
-      if (!recency || Date.now() - recency > ACTIVE_WINDOW_MS) continue;
-      found.push({
-        provider: 'codex',
-        sessionId: id,
-        cwd: cwd || '',
-        title: title || '',
-        lastMessage: '',
-        state: 'waiting_input', // Codex 线程存在 = 会话存在等输入，hook 事件精确更新
-        updatedAt: new Date(recency).toISOString(),
-      });
+    // 用 node:sqlite 直接读官方库：不走子进程管道，查询输出不受 1MB maxBuffer
+    // 限制，也不依赖 PATH 里的 sqlite3 CLI
+    const db = new DatabaseSync(dbPath);
+    try {
+      const rows = db
+        .prepare('SELECT id, title, cwd, tokens_used, archived, recency_at_ms FROM threads WHERE archived=0 ORDER BY recency_at_ms DESC')
+        .all();
+      const found = [];
+      for (const row of rows) {
+        const recency = Number(row.recency_at_ms || 0);
+        // 只回显最近 ACTIVE_WINDOW_MS 有活动的（= 正在跑/刚跑完）；recency 无效则跳过
+        if (!recency || Date.now() - recency > ACTIVE_WINDOW_MS) continue;
+        found.push({
+          provider: 'codex',
+          sessionId: row.id,
+          cwd: row.cwd || '',
+          title: row.title || '',
+          lastMessage: '',
+          state: 'waiting_input', // Codex 线程存在 = 会话存在等输入，hook 事件精确更新
+          updatedAt: new Date(recency).toISOString(),
+        });
+      }
+      return found;
+    } finally {
+      db.close();
     }
-    return found;
   } catch (err) {
     console.log('[scanner] Codex threads 查询失败，回退 rollout 扫描:', err.message.slice(0, 80));
     return scanCodexFallback();
@@ -237,31 +241,34 @@ function scanZCode() {
   const dbPath = expandHome('~/.zcode/cli/db/db.sqlite');
   if (!existsSync(dbPath)) return [];
   try {
-    const sql = `SELECT id, title, directory, time_updated, time_archived FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC`;
-    const out = execFileSync('sqlite3', [dbPath, sql], { encoding: 'utf8', timeout: 5000 });
-    const found = [];
-    const lines = out.split('\n').filter(Boolean);
-    for (const line of lines) {
-      const [id, title, directory, timeUpdated, timeArchived] = line.split('|');
-      if (!id) continue;
-      const updated = Number(timeUpdated || 0);
-      // 只回显最近 ACTIVE_WINDOW_MS 有活动的（= 正在跑的任务）；更早的一律视为历史
-      if (Date.now() - updated > ACTIVE_WINDOW_MS) continue;
-      // 跳过子代理（parent_id 关联，主会话才有意义）
-      if (id.includes('subagent')) continue;
-      // 扫描只能确认"会话存在"，不能确定是否执行中（长时间任务无更新时间差）
-      // 状态标 waiting_input（等输入/活动），由 hook 事件精确更新为 running/其他
-      found.push({
-        provider: 'zcode',
-        sessionId: id,
-        cwd: directory || '',
-        title: title || '',
-        lastMessage: '',
-        state: 'waiting_input',
-        updatedAt: new Date(updated).toISOString(),
-      });
+    const db = new DatabaseSync(dbPath);
+    try {
+      const rows = db
+        .prepare('SELECT id, title, directory, time_updated, time_archived FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC')
+        .all();
+      const found = [];
+      for (const row of rows) {
+        const updated = Number(row.time_updated || 0);
+        // 只回显最近 ACTIVE_WINDOW_MS 有活动的（= 正在跑的任务）；更早的一律视为历史
+        if (Date.now() - updated > ACTIVE_WINDOW_MS) continue;
+        // 跳过子代理（parent_id 关联，主会话才有意义）
+        if (row.id.includes('subagent')) continue;
+        // 扫描只能确认"会话存在"，不能确定是否执行中（长时间任务无更新时间差）
+        // 状态标 waiting_input（等输入/活动），由 hook 事件精确更新为 running/其他
+        found.push({
+          provider: 'zcode',
+          sessionId: row.id,
+          cwd: row.directory || '',
+          title: row.title || '',
+          lastMessage: '',
+          state: 'waiting_input',
+          updatedAt: new Date(updated).toISOString(),
+        });
+      }
+      return found;
+    } finally {
+      db.close();
     }
-    return found;
   } catch (err) {
     console.log('[scanner] ZCode session 查询失败，回退 rollout 扫描:', err.message.slice(0, 80));
     return scanZCodeFallback();

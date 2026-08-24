@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { hub, STATES } from '../hub.js';
@@ -26,25 +26,24 @@ const router = Router();
 // hook payload 缺失 cwd/title 时兜底用；查不到返回 null（不阻塞事件）
 const zcodeMetaCache = new Map();
 const ZCODE_DB = path.join(homedir(), '.zcode/cli/db/db.sqlite');
+// 复用连接：hook 事件是热路径，避免每次查标题都重新打开 db；失败时置空下次重开
+let zcodeDb = null;
 function zcodeSessionMeta(sessionId) {
   if (!sessionId) return null;
   if (zcodeMetaCache.has(sessionId)) return zcodeMetaCache.get(sessionId);
   let meta = null;
   try {
-    if (existsSync(ZCODE_DB)) {
-      // 用 .parameter 绑定，避免会话 ID 里的连字符被当成 SQL 语法
-      const out = execFileSync('sqlite3', [
-        ZCODE_DB,
-        '.parameter init',
-        '.parameter set @sid ' + sessionId,
-        'SELECT title, directory FROM session WHERE id = @sid',
-      ], { encoding: 'utf8', timeout: 3000 });
-      const [titleRaw, dirRaw] = out.split('|');
-      const title = titleRaw?.trim();
-      const directory = dirRaw?.trim();
+    if (!zcodeDb && existsSync(ZCODE_DB)) zcodeDb = new DatabaseSync(ZCODE_DB);
+    if (zcodeDb) {
+      // 参数绑定查询，会话 ID 里的连字符是普通值，不会被当成 SQL 语法
+      const row = zcodeDb.prepare('SELECT title, directory FROM session WHERE id = ?').get(sessionId);
+      const title = row?.title?.trim();
+      const directory = row?.directory?.trim();
       if (title || directory) meta = { title: title || null, directory: directory || null };
     }
-  } catch {}
+  } catch {
+    zcodeDb = null; // 连接失效（如 db 被重建/锁定）→ 下次事件重新打开
+  }
   // 只缓存成功结果；失败不缓存（下次再试）
   if (meta) zcodeMetaCache.set(sessionId, meta);
   if (zcodeMetaCache.size > 500) zcodeMetaCache.clear(); // 防膨胀
