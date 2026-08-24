@@ -46,7 +46,12 @@ function clearTimers() {
 }
 
 export function connect() {
-  if (isOpenOrConnecting()) return;
+  // 已有可用连接（含正在建立）：同步补发一次当前状态，
+  // 让新挂载的页面（如 o-page 返回后重建）立即拿到真实连接状态，而不是停留在初始值
+  if (isOpenOrConnecting()) {
+    notify({ type: connected ? 'connected' : 'disconnected' });
+    return;
+  }
   clearTimeout(retryTimer);
   retryTimer = null;
 
@@ -73,6 +78,15 @@ export function connect() {
     }
     if (msg.type === 'snapshot') {
       snapshot = msg.data;
+      if (!connected) {
+        // 服务端推快照即代表连接已建立：补齐 connected 状态
+        // （避免连接瞬间收到的 snapshot 早于 onopen 回调导致状态缺失）
+        connected = true;
+        clearTimeout(connectTimer);
+        retryCount = 0;
+        startHeartbeat();
+        notify({ type: 'connected' });
+      }
       notify({ type: 'snapshot', data: msg.data });
     } else if (msg.type === 'state_change') {
       // 更新本地快照中的对应 session
@@ -94,6 +108,8 @@ export function connect() {
     retryCount = 0; // 连接成功，重置退避
     startHeartbeat();
     notify({ type: 'connected' });
+    // 建连即同步补发快照，覆盖「连接成功但 snapshot 因无后续消息未及时到达」的场景
+    notify({ type: 'snapshot', data: snapshot });
   };
 
   ws.onerror = () => {

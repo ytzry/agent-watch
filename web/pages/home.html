@@ -1,6 +1,6 @@
 <template page>
   <style>
-    :host { display: block; height: 100%; overflow: hidden; }
+    :host { display: block; height: 100%; overflow: hidden; box-sizing: border-box; }
     .page {
       /* 不限制内容宽度：全宽铺开，只加外边距，列数交给网格随宽度动态增减 */
       padding: 0 1rem;
@@ -424,7 +424,7 @@
             } else if (msg.type === 'updated' || msg.type === 'session_update') {
               this.applySnapshot(getSnapshot());
             } else if (msg.type === 'connected') {
-              // 声音播报：连接成功（首次连接 / 断线后恢复）
+              // 声音播报：连接成功（首次连接 / 断线后恢复 / 返回页面时补发）
               if (!this._wasConnected) notifyState('ws_connected');
               this.connected = true;
               this._wasConnected = true;
@@ -435,6 +435,8 @@
               this._wasConnected = false;
             }
           });
+          // 先订阅再连接：connect() 内的同步补发（已连接时返回）才能被本页收到，
+          // 避免「从设置页返回后指示灯停在初始红色」——补发的 connected 事件会把状态修正
           connect();
           this.applySnapshot(getSnapshot());
         },
