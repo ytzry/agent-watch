@@ -36,7 +36,7 @@ function decodeClaudeCwd(encoded) {
   return decoded.startsWith('/') ? decoded : '/' + decoded;
 }
 
-/** 提取 Claude transcript 的 sessionId + 第一条真实 user 文本（标题）+ 真实 cwd + 是否执行中 */
+/** 提取 Claude transcript 的 sessionId + 第一条真实 user 文本（标题）+ 真实 cwd + 是否执行中 + 最后一条消息 */
 function parseClaudeTranscript(filePath) {
   try {
     const lines = readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
@@ -44,6 +44,7 @@ function parseClaudeTranscript(filePath) {
     let firstUserText = '';
     let cwd = '';
     let lastType = '';
+    let lastText = '';
     for (let i = 0; i < lines.length; i++) {
       try {
         const o = JSON.parse(lines[i]);
@@ -65,15 +66,32 @@ function parseClaudeTranscript(filePath) {
           }
           if (text && !text.startsWith('[Request') && !text.startsWith('<')) firstUserText = text.slice(0, 120);
         }
-        // 记录最后一条消息类型（判断是否执行中）
-        if (o.type === 'user' || o.type === 'assistant') lastType = o.type;
+        // 最后一条"有实质内容"的对话消息（user 提问 / assistant 文字回复），排除 tool_result / system / 纯工具
+        if ((o.type === 'user' || o.type === 'assistant') && o.message?.content) {
+          const c = o.message.content;
+          let text = '';
+          if (typeof c === 'string') text = c.trim();
+          else if (Array.isArray(c)) {
+            text = c
+              .filter((x) => x.type === 'text' && !x.text?.startsWith('<'))
+              .map((x) => x.text)
+              .join(' ')
+              .trim();
+          }
+          if (text) {
+            lastType = o.type;
+            lastText = text.slice(0, 200); // 最后消息展示用，截断到 200
+          }
+        }
+        // 记录最后一条消息类型（判断是否执行中；仅 user/assistant，且上面的实质内容判定优先）
+        if (o.type === 'user' || o.type === 'assistant') lastType = lastType || o.type;
       } catch {}
     }
     // 执行中判断：最后一条是 user（用户刚提交，agent 正在跑）；最后是 assistant 则已回复完（不算执行中）
     const isRunning = lastType === 'user';
-    return { sessionId, lastUserText: firstUserText, cwd, isRunning };
+    return { sessionId, lastUserText: firstUserText, cwd, lastMessage: lastText, isRunning };
   } catch {
-    return { sessionId: '', lastUserText: '', cwd: '', isRunning: false };
+    return { sessionId: '', lastUserText: '', cwd: '', lastMessage: '', isRunning: false };
   }
 }
 
@@ -178,16 +196,17 @@ function scanClaude() {
           // 两者都满足才判定为"正在跑/刚跑完"的对话。
           const lastActivity = lastTranscriptActivity(filePath);
           if (Date.now() - lastActivity > ACTIVE_WINDOW_MS) continue;
-          const { sessionId, lastUserText, cwd, isRunning } = parseClaudeTranscript(filePath);
+          const { sessionId, lastUserText, cwd, lastMessage, isRunning } = parseClaudeTranscript(filePath);
           if (!sessionId) continue;
           found.push({
             provider: 'claude-code',
             sessionId,
             cwd: cwd || decodeClaudeCwd(dir),
             title: lastUserText,
-            lastMessage: '',
+            lastMessage,
             state: isRunning ? 'running' : 'waiting_input',
-            updatedAt: new Date(mtime).toISOString(),
+            // updatedAt 用内容最后对话时间戳（mtime 会被非对话动作刷新，只作粗筛）
+            updatedAt: new Date(lastActivity).toISOString(),
           });
         }
       } catch {}
@@ -377,6 +396,8 @@ export function scanAndRestore() {
       project: s.cwd ? projectFromCwd(s.cwd) : '',
       title: s.title,
       lastMessage: s.lastMessage,
+      // 扫描源的 updatedAt 是各家的真实活动时间（Claude=内容对话时间戳；Codex/ZCode=recency/mtime），
+      // 直接用于排序，不再用 Date.now() 假造"现在"——否则服务重启会把所有回显会话顶到最前
       updatedAt: Date.parse(s.updatedAt) || Date.now(),
       lastActivityAt: Date.parse(s.updatedAt) || Date.now(),
       state,
