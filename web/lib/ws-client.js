@@ -241,13 +241,13 @@ function updateSessionInSnapshot(session) {
     }
   }
   if (!found) {
-    // 新会话：按 project 归组
+    // 新会话：按 project 归组（位置交给底部 sortGroups 统一排序）
     let g = groups.find((x) => x.project === project);
     if (!g) {
       g = { project, sessions: [] };
       groups.push(g);
     }
-    g.sessions.unshift(session);
+    g.sessions.push(session);
   }
   snapshot = { ...snapshot, groups: sortGroups(groups), counts: recount(groups) };
   // 触发局部刷新（页面直接读 snapshot，这里不强制重渲染，由页面 subscribe 处理）
