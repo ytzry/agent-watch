@@ -42,27 +42,20 @@ function installClaude() {
   backup(file);
   const settings = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
   settings.hooks = settings.hooks || {};
-  const events = {
-    SessionStart: { url: '/api/hooks/claude-code', timeout: 10 },
-    UserPromptSubmit: { url: '/api/hooks/claude-code', timeout: 10 },
-    PreToolUse: { url: '/api/hooks/claude-code', timeout: 10 },
-    PostToolUse: { url: '/api/hooks/claude-code', timeout: 10 },
-    PostToolUseFailure: { url: '/api/hooks/claude-code', timeout: 10 },
-    PermissionRequest: { url: '/api/hooks/claude-code', timeout: 10 },
-    Notification: { url: '/api/hooks/claude-code', timeout: 10 },
-    Stop: { url: '/api/hooks/claude-code', timeout: 10 },
-    StopFailure: { url: '/api/hooks/claude-code', timeout: 10 },
-    SessionEnd: { url: '/api/hooks/claude-code', timeout: 10 },
-    SubagentStart: { url: '/api/hooks/claude-code', timeout: 10 },
-    SubagentStop: { url: '/api/hooks/claude-code', timeout: 10 },
-  };
-  for (const [ev, { url, timeout }] of Object.entries(events)) {
+  // type:"http" 需要**绝对 URL**（相对路径无法发起请求），与 Codex/ZCode 的 curl 前缀保持一致
+  const url = `${BASE}/api/hooks/claude-code`;
+  const events = [
+    'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse',
+    'PostToolUseFailure', 'PermissionRequest', 'Notification', 'Stop',
+    'StopFailure', 'SessionEnd', 'SubagentStart', 'SubagentStop',
+  ];
+  for (const ev of events) {
     settings.hooks[ev] = [
-      { hooks: [{ type: 'http', url, timeout }] },
+      { hooks: [{ type: 'http', url, timeout: 10 }] },
     ];
   }
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
-  console.log('  ✅ hooks 已写入（type:"http" 直连）');
+  console.log(`  ✅ hooks 已写入（type:"http" 直连 ${url}）`);
 }
 
 /* ---------- Codex ---------- */

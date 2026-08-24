@@ -147,7 +147,7 @@ created → running → awaiting_approval → running
 - **上下文用量**依赖内部文件格式（ZCode rollout / Claude transcript / Codex rollout 官方标注可能变更），解析容错，变更时降级为不显示
 - **todo 列表**：三家均无官方 todo hook，通过捕获 `TodoWrite`（Claude/ZCode）或 `update_plan`（Codex）工具调用解析
 - **启动扫描回显**：服务启动时自动恢复活跃会话，无需额外存储——三家都读**官方数据源**（不依赖 hook 猜测）：
-  - **Claude Code**：`claude agents --json`（权威运行中会话：pid/真实 cwd/sessionId/status，idle=空闲、blocked=等待审批、running=执行中）
+  - **Claude Code**：`~/.claude/projects` 下最近写入的 transcript（文件 mtime = 真实对话活动；打开了但没对话的进程没有 jsonl，不会误报成任务；最后一条消息是 user → running，否则 waiting_input）
   - **Codex**：`~/.codex/state_5.sqlite` 的 `threads` 表（官方会话索引：title/cwd/tokens_used/recency_at_ms/archived）
   - **ZCode**：`~/.zcode/cli/db/db.sqlite` 的 `session` 表（title/directory/time_updated/time_archived）
 - **正在跑的会话也能看到**：服务启动前就在进行的任务，启动后被扫描回显（状态与官方一致），后续 hook 事件实时更新

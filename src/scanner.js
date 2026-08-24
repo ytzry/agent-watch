@@ -2,7 +2,8 @@
  * 启动扫描器：扫描各 agent 的会话文件，重建**当前在跑的**会话记录
  * （服务启动前就在进行的任务，启动后被回显；不回显历史/空闲会话）
  *
- * - Claude Code: `claude agents --json`（官方权威运行中进程列表）
+ * - Claude Code: ~/.claude/projects 下最近写入的 transcript（文件 mtime = 真实对话活动；
+ *                打开了但没对话的交互进程没有 jsonl，天然不会误报成任务）
  * - Codex:       ~/.codex/state_5.sqlite 的 threads 表（官方会话索引）
  * - ZCode:       ~/.zcode/cli/db/db.sqlite 的 session 表
  *
@@ -128,63 +129,8 @@ function parseZCodeRollout(filePath) {
   }
 }
 
-/** 在 ~/.claude/projects 下查找 sessionId 对应的 transcript 文件（返回路径或 null） */
-function findClaudeTranscript(sessionId) {
-  const root = expandHome('~/.claude/projects');
-  if (!existsSync(root)) return null;
-  try {
-    for (const dir of readdirSync(root)) {
-      const p = path.join(root, dir, sessionId + '.jsonl');
-      if (existsSync(p)) return p;
-    }
-  } catch {}
-  return null;
-}
-
-/** 扫描 Claude Code 会话：用官方 `claude agents --json`（权威的运行中进程列表） */
+/** 扫描 Claude Code 会话：transcript 文件的 mtime 即真实对话活动 */
 function scanClaude() {
-  try {
-    const out = execFileSync('claude', ['agents', '--json'], {
-      timeout: 10000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const agents = JSON.parse(out);
-    if (!Array.isArray(agents)) return [];
-    const found = [];
-    for (const a of agents) {
-      if (!a.sessionId) continue;
-      // transcript 最近写入时间 = 真实最近活动（比 startedAt 准：老进程可能今天还在用）
-      const transcript = findClaudeTranscript(a.sessionId);
-      const lastActivity = transcript ? statSync(transcript).mtimeMs : 0;
-      // 状态映射（事件驱动状态机）：idle = 坐在提示符等输入 → waiting；blocked = 等审批；无 status = 未知
-      let state = 'running';
-      if (a.status === 'idle') state = 'waiting_input';
-      else if (a.status === 'blocked' || a.state === 'blocked') state = 'awaiting_approval';
-      // 只回显最近 5 分钟还有活动的会话（进程列表里可能挂着长期闲置的残留终端）
-      if (Date.now() - (lastActivity || a.startedAt || Date.now()) > ACTIVE_WINDOW_MS) continue;
-      // 标题：优先 cwd basename 作为项目显示；会话真实标题由 tailer 的 ai-title/首条 prompt 覆盖
-      const projectName = a.cwd ? a.cwd.split('/').filter(Boolean).pop() || '' : '';
-      found.push({
-        provider: 'claude-code',
-        sessionId: a.sessionId,
-        cwd: a.cwd || '',
-        title: projectName || a.name || '',
-        lastMessage: '',
-        state,
-        updatedAt: new Date(lastActivity || a.startedAt || Date.now()).toISOString(),
-      });
-    }
-    return found;
-  } catch (err) {
-    // claude 命令不可用或超时 → 回退到目录扫描（尽量找）
-    console.log('[scanner] claude agents --json 不可用，回退目录扫描:', err.message.slice(0, 80));
-    return scanClaudeFallback();
-  }
-}
-
-/** 回退方案：目录扫描（claude agents --json 不可用时） */
-function scanClaudeFallback() {
   const root = expandHome('~/.claude/projects');
   if (!existsSync(root)) return [];
   const found = [];
@@ -197,7 +143,9 @@ function scanClaudeFallback() {
         for (const f of files) {
           const filePath = path.join(dirPath, f);
           const mtime = statSync(filePath).mtimeMs;
-          // 只看最近 ACTIVE_WINDOW_MS 内写入过的文件（= 正在跑的任务）
+          // 只看最近 ACTIVE_WINDOW_MS 内写入过的文件（= 正在跑的任务）。
+          // 不用进程 startedAt 兜底：打开了但没发过消息的交互终端没有 transcript，
+          // 一旦按启动时间回显就会把"从未对话的会话"误报成任务
           if (Date.now() - mtime > ACTIVE_WINDOW_MS) continue;
           const { sessionId, lastUserText, cwd, isRunning } = parseClaudeTranscript(filePath);
           if (!sessionId) continue;
@@ -350,7 +298,7 @@ function scanZCodeFallback() {
 
 /**
  * 启动时扫描并回显活跃会话。
- * 只填充新会话（不覆盖已存在的活跃会话状态），状态用各 agent 报告的（claude agents --json 的 status）。
+ * 只填充新会话（不覆盖已存在的活跃会话状态），状态用各 agent 扫描源报告的 state 值，非法值回退 running。
  */
 export function scanAndRestore() {
   const sessions = [...scanClaude(), ...scanCodex(), ...scanZCode()];
