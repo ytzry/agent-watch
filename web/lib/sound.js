@@ -48,8 +48,34 @@ let ctx = null;
 let masterVolume = Number(localStorage?.getItem(MASTER_VOLUME_KEY) || 0.7) || 0.7;
 
 function getCtx() {
-  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // 自动播放策略：无用户手势时 AudioContext 初始为 suspended，osc.start() 只排队不发声。
+    // 这里尽力 resume（若浏览器放行则成功；否则等首次用户手势由 unlockAudio 再试）
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  }
   return ctx;
+}
+
+/** 解锁音频：浏览器要求用户手势后才能发声，首次交互时 resume 挂起的上下文 */
+function unlockAudio() {
+  try {
+    const c = getCtx();
+    if (c.state === 'suspended') c.resume().catch(() => {});
+  } catch {}
+}
+
+// 首次用户交互（点击/触摸/按键）时解锁；之后移除监听，避免常驻开销
+if (typeof window !== 'undefined') {
+  const unlock = () => {
+    unlockAudio();
+    window.removeEventListener('pointerdown', unlock);
+    window.removeEventListener('touchstart', unlock);
+    window.removeEventListener('keydown', unlock);
+  };
+  window.addEventListener('pointerdown', unlock);
+  window.addEventListener('touchstart', unlock);
+  window.addEventListener('keydown', unlock);
 }
 
 function tone(freq, start, dur, type = 'sine', gain = 0.5) {
@@ -69,7 +95,10 @@ function tone(freq, start, dur, type = 'sine', gain = 0.5) {
 /** 播放指定音效（带音量） */
 export function playSound(name, volume) {
   const v = volume ?? masterVolume;
-  const t = getCtx().currentTime;
+  const c = getCtx();
+  // 播放前再尝试一次 resume：某些浏览器挂起后不自动恢复，播放时唤醒最可靠
+  if (c.state === 'suspended') c.resume().catch(() => {});
+  const t = c.currentTime;
   try {
     switch (name) {
       case 'beep':

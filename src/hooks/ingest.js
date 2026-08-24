@@ -86,6 +86,12 @@ router.post('/hooks/:provider', async (req, res) => {
 
 /** 把归一化事件应用到状态中枢 */
 export function applyEvent(ev) {
+  // SessionStart 且会话尚不存在 → 直接丢弃，不创建卡片。
+  // ZCode 打开/新建未发消息的会话也会触发 SessionStart，若在这里创建会话，
+  // 面板上就会堆满"从未对话"的"新建"卡片（误报）。只有真实活动才创建。
+  // （6266c67 只在 switch 分支 return，但开头 ensureSession 已创建，需在这里拦截）
+  if (ev.event === EVENTS.SESSION_START && !hub.sessions.has(ev.sessionId)) return;
+
   const s = hub.ensureSession(ev.sessionId, ev.provider);
   const patch = {};
 
@@ -151,15 +157,13 @@ export function applyEvent(ev) {
   }
 
   switch (ev.event) {
-    case EVENTS.SESSION_START: {
-      // 会话开始/打开 → 若会话尚不存在则**真正不创建**。原因：ZCode 打开/新建一个
-      // 未发消息的会话也会触发 SessionStart，若在这里保留会话，面板上就会出现
-      // "从未对话"的"新建"卡片（误报）。只有真实活动（UserPromptSubmit / 工具调用等）
-      // 才创建卡片。
-      // 若会话已存在（resume 或扫描回显过）→ 保持原状态不变（打开会话不算活动，不重置 waiting_input）。
-      if (!hub.sessions.has(ev.sessionId)) return;
-      break; // 已存在：仅补公共字段（cwd/title 等），不重置状态
-    }
+    case EVENTS.SESSION_START:
+      // 会话开始/打开：开头已拦截"不存在"的情况；到这里必然已存在
+      // （resume 或扫描回显过）→ 仅补公共字段（cwd/title 等），保持原状态不变
+      // （打开会话不算活动，不重置 waiting_input，也不刷新 updatedAt——否则
+      //  打开一个旧会话就会把它顶到最前，误报成"有活动"）。
+      if (Object.keys(patch).length) Object.assign(s, patch);
+      break;
 
     case EVENTS.PROMPT:
       hub.update(ev.sessionId, {
