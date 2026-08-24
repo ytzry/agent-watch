@@ -149,12 +149,15 @@ export function applyEvent(ev) {
   }
 
   switch (ev.event) {
-    case EVENTS.SESSION_START:
-      // 会话开始/打开 → **不创建会话**。原因：ZCode 打开一个未发消息的会话也会触发
-      // SessionStart，若在这里创建卡片，面板上就会出现"从未对话"的会话（误报）。
-      // 只有真实活动（UserPromptSubmit / 工具调用等）才创建卡片。
+    case EVENTS.SESSION_START: {
+      // 会话开始/打开 → 若会话尚不存在则**真正不创建**。原因：ZCode 打开/新建一个
+      // 未发消息的会话也会触发 SessionStart，若在这里保留会话，面板上就会出现
+      // "从未对话"的"新建"卡片（误报）。只有真实活动（UserPromptSubmit / 工具调用等）
+      // 才创建卡片。
       // 若会话已存在（resume 或扫描回显过）→ 保持原状态不变（打开会话不算活动，不重置 waiting_input）。
-      return;
+      if (!hub.sessions.has(ev.sessionId)) return;
+      break; // 已存在：仅补公共字段（cwd/title 等），不重置状态
+    }
 
     case EVENTS.PROMPT:
       hub.update(ev.sessionId, {
