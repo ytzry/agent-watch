@@ -8,6 +8,13 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Agent Watch</title>
     <script src="/lib/ofa.mjs" type="module"></script>
+    <script type="module">
+      // 打开页面即保持屏幕常亮（手机看板不熄屏）；切后台期间系统会自动释放，
+      // 重新回到页面时自动恢复
+      import { acquireWakeLock, watchVisibilityForWakeLock } from '/lib/wake-lock.js';
+      acquireWakeLock();
+      watchVisibilityForWakeLock();
+    </script>
     <link rel="stylesheet" href="/lib/theme.css" />
     <style>
       html,
