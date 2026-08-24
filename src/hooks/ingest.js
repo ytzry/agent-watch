@@ -9,10 +9,12 @@ import { findSessionFile, parseZCodeRollout, parseClaudeTranscript, parseCodexRo
 /**
  * 从 cwd 推断项目名：向上找 .git 目录，取仓库名；没有则取 basename。
  * 注意：hook 运行时拿 cwd 即可，不必读磁盘（避免 hook 阻塞）。这里做纯路径推断。
+ * 跨平台：先把 \ 归一成 / 再切，兼容 Windows（D:\a\b）与 POSIX 路径，也兼容混用分隔符的路径。
  */
 export function projectFromCwd(cwd) {
   if (!cwd || typeof cwd !== 'string') return '未知项目';
-  const parts = cwd.split('/').filter(Boolean);
+  // Windows 路径（C:\...）里的反斜杠会被 JS 字符串转义吃掉，用 replace 恢复后按两种分隔符切
+  const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
   if (parts.length === 0) return cwd;
   // 找 .git 段：/path/to/repo/.git 或 /path/to/repo（含 .git 子目录）
   const idx = parts.indexOf('.git');
