@@ -392,9 +392,10 @@
               const ctx = s.usage.contextTokens || s.usage.totalTokens || 0;
               const max = s.usage.maxTokens || 0;
               this.usageText = `${this.fmtTokens(ctx)} / ${this.fmtTokens(max)} (${s.usage.pct}%)`;
-              // 缓存命中率：0-1 → 百分比（cc-switch 口径 cache_read/总输入）
+              // 缓存命中率：0-1 → 百分比。不四舍五入，保留两位小数展示，
+              // 精确反映真实比值（99.96% 就显示 99.96%，不虚报成 100%）
               const hit = s.usage.cacheHitRate;
-              this.cacheHitText = hit != null && isFinite(hit) ? Math.round(hit * 100) + '%' : '';
+              this.cacheHitText = hit != null && isFinite(hit) ? (hit * 100).toFixed(2) + '%' : '';
             } else {
               this.usageText = '';
               this.cacheHitText = '';

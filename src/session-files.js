@@ -298,8 +298,9 @@ export function parseZCodeRollout(filePath, sessionId) {
       cacheReadTokens: last.cacheReadTokens ?? null,
       reasoningTokens: last.reasoningTokens ?? null,
       maxTokens: ctxWindow,
-      // 缓存命中率 = cache_read / (input + cache_read + cache_create)，范围 0-1
-      cacheHitRate: hitDenom > 0 ? Math.round((sumCacheRead / hitDenom) * 1000) / 1000 : null,
+      // 缓存命中率 = cache_read / (input + cache_read + cache_create)，范围 0-1。
+      // 不取整：保留原始比值，由前端决定展示精度（取整会把 99.9% 显示成 100%）
+      cacheHitRate: hitDenom > 0 ? sumCacheRead / hitDenom : null,
     } : null;
     if (!usage && !firstPrompt) return null;
     return { usage, firstPrompt: firstPrompt || null };
@@ -387,8 +388,9 @@ export function parseClaudeTranscript(filePath, sessionId) {
         totalTokens: lastContextInput || totalInput,
         contextTokens: lastContextInput || totalInput,
         sessionTotalTokens: totalTokens,
-        // 缓存命中率 = cache_read / (input + cache_read + cache_create)，范围 0-1
-        cacheHitRate: hitDenom > 0 ? Math.round((totalCacheRead / hitDenom) * 1000) / 1000 : null,
+        // 缓存命中率 = cache_read / (input + cache_read + cache_create)，范围 0-1。
+        // 不取整：保留原始比值，由前端决定展示精度（取整会把 99.9% 显示成 100%）
+        cacheHitRate: hitDenom > 0 ? totalCacheRead / hitDenom : null,
       },
       lastMessage: lastText || null,
       aiTitle,
@@ -454,7 +456,7 @@ export function parseCodexRollout(filePath, sessionId) {
     return {
       usage: lastUsage ? {
         ...lastUsage,
-        cacheHitRate: hitDenom > 0 ? Math.round((sumCached / hitDenom) * 1000) / 1000 : null,
+        cacheHitRate: hitDenom > 0 ? sumCached / hitDenom : null,
       } : null,
       lastMessage: lastText || null,
     };
