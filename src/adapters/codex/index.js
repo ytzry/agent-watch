@@ -86,6 +86,7 @@ export function parseRollout(filePath) {
   let cwd = '';
   let sessionId = '';
   let modelContextWindow = null;
+  let model = ''; // 最近一次 turn_context 的模型名（如 gpt-5.4）
   // 命中率：累计所有 token_count 事件（input 含 cached，分母=总输入即可）
   let sumInput = 0, sumCached = 0;
   for (const line of lines) {
@@ -93,6 +94,8 @@ export function parseRollout(filePath) {
       const obj = JSON.parse(line);
       if (!sessionId && obj.type === 'session_meta' && obj.payload?.id) sessionId = obj.payload.id;
       if (!cwd && obj.type === 'session_meta' && obj.payload?.cwd) cwd = obj.payload.cwd;
+      // 模型名在 turn_context 行（payload.model），不在 session_meta；一直覆盖到最后一行
+      if (obj.type === 'turn_context' && obj.payload?.model) model = obj.payload.model;
       if (obj.type === 'event_msg' && obj.payload?.type === 'token_count' && obj.payload.info) {
         const info = obj.payload.info;
         const u = info.last_token_usage || info.total_token_usage || null;
@@ -142,6 +145,7 @@ export function parseRollout(filePath) {
     lastMessage: lastText || null,
     cwd,
     sessionId,
+    model: model || null,
     replyState: null, // Codex rollout 无明确的"回复完成"信号（task_complete 可作完成依据）
   };
 }
@@ -165,6 +169,7 @@ const adapter = {
       cwd: r.cwd || '',
       sessionId: r.sessionId || '',
       mode: null, // 由 scanner 从 threads.approval_mode 传入
+      model: r.model || '',
       lastActivityAt: 0,
       replyState: null,
     };
