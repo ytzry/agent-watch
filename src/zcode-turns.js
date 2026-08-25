@@ -16,6 +16,11 @@
  *       cancelled → ended（用户接管，本轮已终止）；completed → idle；error → error
  *   - 扫描回显（latestZcodeTurns）：服务启动时修正 restore 状态，避免把已中断的
  *     会话按 rollout 尾部误恢复成 running
+ *
+ * 子代理运行计数也在这里做（refreshRunningSubagents）：ZCode 不发 SubagentStart/
+ * SubagentStop hook（白名单里没有），子代理也不写独立 rollout 文件，唯一信号源是
+ * 官方 db——子代理会话 id 形如 sess_subagent_agent_<uuid>，session.parent_id 指向
+ * 主会话，正在运行 = 该子代理会话在 turn_usage 里有一条 status='running' 的记录。
  */
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -126,9 +131,55 @@ function applyTurnRow(row) {
 let lastRowid = 0;
 let cursorReady = false;
 
+/**
+ * 刷新各已知 ZCode 会话的「正在运行的子代理数」→ hub.subagentRunning。
+ *
+ * 为什么放在这里而不是 tailer/hook：ZCode 没有 SubagentStart/SubagentStop hook，
+ * 子代理也不写独立 rollout，唯一权威信号是官方 db——子代理会话（id 形如
+ * sess_subagent_agent_*）的 session.parent_id 指向主会话，turn_usage 里有一条
+ * status='running' 记录即代表该子代理正在运行。一次查询拿全量映射，再分摊到各
+ * 已知会话，避免逐个主会话查询。
+ *
+ * 只在本会话 subagentRunning 变化时写 hub（不问 hub.update 否则每轮都对所有
+ * ZCode 会话发一次无谓 session_update，刷 updatedAt 并广播打断前端）。
+ */
+export function refreshRunningSubagents() {
+  const db = openTurnDb();
+  if (!db) return;
+  let groupByParent;
+  try {
+    groupByParent = db
+      .prepare(`
+        SELECT s.parent_id AS parentId, COUNT(DISTINCT s.id) AS n
+        FROM session s
+        JOIN turn_usage tu ON tu.session_id = s.id
+        WHERE s.id LIKE 'sess_subagent_%'
+          AND s.parent_id IS NOT NULL AND s.parent_id != ''
+          AND tu.status = 'running'
+        GROUP BY s.parent_id
+      `)
+      .all();
+  } catch {
+    turnDb = null; // 连接失效（db 重建/锁）→ 下次重开
+    return;
+  }
+  const running = new Map(groupByParent.map((r) => [r.parentId, Number(r.n)]));
+  for (const s of hub.sessions.values()) {
+    if (s.provider !== 'zcode') continue; // 只对 ZCode 会话；Claude/Codex 用 hook 计数
+    const n = running.get(s.id) || 0;
+    if ((s.subagentRunning || 0) !== n) {
+      hub.update(s.id, { subagentRunning: n });
+    }
+  }
+}
+
 /** 启动轮次状态轮询（server 启动时调用一次） */
 export function startZcodeTurnPoller() {
   pollZcodeTurnsOnce(); // 建立游标：只关注服务启动之后的轮次
-  const timer = setInterval(() => pollZcodeTurnsOnce(), POLL_INTERVAL_MS);
+  refreshRunningSubagents();
+  const timer = setInterval(() => {
+    pollZcodeTurnsOnce();
+    refreshRunningSubagents();
+  }, POLL_INTERVAL_MS);
   timer.unref?.();
 }
