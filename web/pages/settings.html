@@ -2,28 +2,42 @@
   <style>
     :host {
       display: block;
-      padding: 1rem;
+      height: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    .page {
+      /* 布局：header 固定 + 下方内容区滚动（与 home 一致，避免 sticky header 顶部空隙/透出） */
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-sizing: border-box;
       max-width: 100%;
       margin: 0 auto;
-      box-sizing: border-box;
-      /* 内容在 :host（o-page，高 100% 由 o-app slotted 保证）内滚动 */
-      height: 100%;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
+      padding: 1rem;
     }
     @media (min-width: 640px) {
-      :host {
+      .page {
         max-width: 640px;
         padding: 1.25rem 1.5rem;
       }
+    }
+    /* 内容区：唯一可滚动区域 */
+    .content {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 0.5rem;
     }
     .header {
       display: flex;
       align-items: center;
       gap: 10px;
       margin-bottom: 0.9rem;
-      position: sticky;
-      top: 0;
+      position: relative; /* header 固定不随内容滚动：避免 sticky + backdrop-filter 在顶部露空隙/透出列表 */
+      flex-shrink: 0;
       background: hsl(var(--background) / 0.92);
       backdrop-filter: blur(8px);
       padding: 0.6rem 0;
@@ -270,26 +284,27 @@
       border: 2px solid hsl(var(--primary-foreground));
     }
     /* ===== 自定义滚动条（shadcn 风格） ===== */
-    :host::-webkit-scrollbar {
+    .content::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
-    :host::-webkit-scrollbar-track {
+    .content::-webkit-scrollbar-track {
       background: transparent;
     }
-    :host::-webkit-scrollbar-thumb {
+    .content::-webkit-scrollbar-thumb {
       background: hsl(var(--border));
       border-radius: 9999px;
     }
-    :host::-webkit-scrollbar-thumb:hover {
+    .content::-webkit-scrollbar-thumb:hover {
       background: hsl(var(--muted-foreground) / 0.5);
     }
-    :host {
+    .content {
       scrollbar-width: thin; /* Firefox */
       scrollbar-color: hsl(var(--border)) transparent;
     }
   </style>
 
+  <div class="page">
   <div class="header">
     <h1>声音播报设置</h1>
     <a
@@ -330,6 +345,7 @@
     </div>
   </div>
 
+  <div class="content">
   <div class="row master">
     <i
       class="aw-ic"
@@ -466,6 +482,8 @@
       </div>
     </o-fill>
   </o-if>
+  </div>
+  </div>
 
   <script>
     export default async ({ load }) => {
