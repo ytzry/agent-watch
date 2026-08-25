@@ -11,13 +11,17 @@
  *
  * 回显的会话仅靠扫描无法确定"是否正在执行"，统一标 waiting_input，
  * 由后续 hook 事件精确更新为 running / 其他状态。
+ *
+ * 文件解析统一走 adapter.parseSessionFile（session-files.parseSessionFile），
+ * 不再各自维护一套解析。
  */
-import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, statSync, existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { hub, STATES } from './hub.js';
-import { parseZCodeRollout as parseZCodeRolloutFile } from './session-files.js';
+import { parseSessionFile } from './session-files.js';
+import { readFileTail } from './session-utils.js';
 import { projectFromCwd } from './hooks/ingest.js';
 
 // 只回显最近 5 分钟内有活动的会话（= 当前正在跑的任务；更早的一律视为历史，不回显）
@@ -36,126 +40,13 @@ function decodeClaudeCwd(encoded) {
   return decoded.startsWith('/') ? decoded : '/' + decoded;
 }
 
-/** 提取 Claude transcript 的 sessionId + 第一条真实 user 文本（标题）+ 真实 cwd + 是否执行中 + 最后一条消息 */
-function parseClaudeTranscript(filePath) {
-  try {
-    const lines = readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
-    let sessionId = '';
-    let firstUserText = '';
-    let cwd = '';
-    let lastType = '';
-    let lastText = '';
-    for (let i = 0; i < lines.length; i++) {
-      try {
-        const o = JSON.parse(lines[i]);
-        if (!sessionId && o.sessionId) sessionId = o.sessionId;
-        // 真实 cwd 在 transcript 内容里（比目录名解码准确，目录名编码有歧义）
-        if (!cwd && o.cwd) cwd = o.cwd;
-        // 第一条真正的 user 文本（跳过 tool_result / system；content 可能是 string 或数组）
-        if (!firstUserText && o.type === 'user' && o.message?.content) {
-          const c = o.message.content;
-          let text = '';
-          if (typeof c === 'string') {
-            text = c.trim();
-          } else if (Array.isArray(c)) {
-            text = c
-              .filter((x) => x.type === 'text' && !x.text?.startsWith('<'))
-              .map((x) => x.text)
-              .join(' ')
-              .trim();
-          }
-          if (text && !text.startsWith('[Request') && !text.startsWith('<')) firstUserText = text.slice(0, 120);
-        }
-        // 最后一条"有实质内容"的对话消息（user 提问 / assistant 文字回复），排除 tool_result / system / 纯工具
-        if ((o.type === 'user' || o.type === 'assistant') && o.message?.content) {
-          const c = o.message.content;
-          let text = '';
-          if (typeof c === 'string') text = c.trim();
-          else if (Array.isArray(c)) {
-            text = c
-              .filter((x) => x.type === 'text' && !x.text?.startsWith('<'))
-              .map((x) => x.text)
-              .join(' ')
-              .trim();
-          }
-          if (text) {
-            lastType = o.type;
-            lastText = text.slice(0, 200); // 最后消息展示用，截断到 200
-          }
-        }
-        // 记录最后一条消息类型（判断是否执行中；仅 user/assistant，且上面的实质内容判定优先）
-        if (o.type === 'user' || o.type === 'assistant') lastType = lastType || o.type;
-      } catch {}
-    }
-    // 执行中判断：最后一条是 user（用户刚提交，agent 正在跑）；最后是 assistant 则已回复完（不算执行中）
-    const isRunning = lastType === 'user';
-    return { sessionId, lastUserText: firstUserText, cwd, lastMessage: lastText, isRunning };
-  } catch {
-    return { sessionId: '', lastUserText: '', cwd: '', lastMessage: '', isRunning: false };
-  }
-}
-
-/** 提取 Codex rollout 的 sessionId/cwd/lastUserText */
-function parseCodexRollout(filePath) {
-  try {
-    const lines = readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
-    let sessionId = '';
-    let cwd = '';
-    let lastUserText = '';
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const o = JSON.parse(lines[i]);
-        if (!sessionId && o.session_id) sessionId = o.session_id;
-        if (!cwd && o.cwd) cwd = o.cwd;
-        if (!lastUserText && o.type === 'response_item' && o.payload?.type === 'message' && o.payload?.role === 'user') {
-          const text = o.payload.content?.[0]?.text || '';
-          if (text) lastUserText = text.slice(0, 120);
-        }
-      } catch {}
-    }
-    return { sessionId, cwd, lastUserText };
-  } catch {
-    return { sessionId: '', cwd: '', lastUserText: '' };
-  }
-}
-
-/** 提取 ZCode rollout 的 sessionId + 首条 user 消息 */
-function parseZCodeRollout(filePath) {
-  try {
-    const lines = readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
-    let sessionId = '';
-    let lastUserText = '';
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const o = JSON.parse(lines[i]);
-        if (!sessionId && o.sessionId) sessionId = o.sessionId;
-        // request.body 是 messages 数组（对象键），找 user 消息
-        if (!lastUserText && o.request?.body) {
-          const body = o.request.body;
-          const msgs = Array.isArray(body) ? body : Object.values(body).filter((v) => v && typeof v === 'object');
-          for (const m of msgs) {
-            if (m.role === 'user' && m.content) {
-              const text = Array.isArray(m.content)
-                ? m.content.filter((c) => typeof c === 'string' || c?.type === 'text').map((c) => (typeof c === 'string' ? c : c.text)).join(' ')
-                : String(m.content);
-              if (text.trim()) { lastUserText = text.trim().slice(0, 120); break; }
-            }
-          }
-        }
-      } catch {}
-    }
-    return { sessionId, lastUserText };
-  } catch {
-    return { sessionId: '', lastUserText: '' };
-  }
-}
-
 /** 从 transcript 内容提取最后一条真实对话时间戳（user/assistant 行的 timestamp，毫秒）。
  *  mtime 会被非对话动作（打开/恢复/快照重写）刷新，内容时间戳才是真实对话活动。
  *  返回 0 表示无对话时间戳。 */
 function lastTranscriptActivity(filePath) {
   try {
-    const lines = readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
+    const body = readFileTail(filePath, 1 * 1024 * 1024);
+    const lines = body.split('\n').filter(Boolean);
     let lastTs = 0;
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
@@ -167,7 +58,7 @@ function lastTranscriptActivity(filePath) {
       } catch {}
     }
   } catch {}
-  return lastTs;
+  return 0;
 }
 
 /** 扫描 Claude Code 会话：transcript 文件 mtime + 内容真实对话时间戳双重判定。
@@ -196,17 +87,20 @@ function scanClaude() {
           // 两者都满足才判定为"正在跑/刚跑完"的对话。
           const lastActivity = lastTranscriptActivity(filePath);
           if (Date.now() - lastActivity > ACTIVE_WINDOW_MS) continue;
-          const { sessionId, lastUserText, cwd, lastMessage, isRunning } = parseClaudeTranscript(filePath);
-          if (!sessionId) continue;
+          const sid = f.replace('.jsonl', '');
+          // 统一解析（title/lastMessage/cwd/mode/usage/replyState）
+          const info = parseSessionFile(sid, 'claude-code', '') || {};
           found.push({
             provider: 'claude-code',
-            sessionId,
-            cwd: cwd || decodeClaudeCwd(dir),
-            title: lastUserText,
-            lastMessage,
-            state: isRunning ? 'running' : 'waiting_input',
+            sessionId: sid,
+            cwd: info.cwd || decodeClaudeCwd(dir),
+            title: info.aiTitle || info.firstPrompt || '',
+            lastMessage: info.lastMessage || '',
+            mode: info.mode || null,
+            usage: info.usage || null,
+            state: info.replyState === 'done' ? 'idle' : (info.replyState === 'running' ? 'running' : 'waiting_input'),
             // updatedAt 用内容最后对话时间戳（mtime 会被非对话动作刷新，只作粗筛）
-            updatedAt: new Date(lastActivity).toISOString(),
+            updatedAt: lastActivity || mtime,
           });
         }
       } catch {}
@@ -225,21 +119,26 @@ function scanCodex() {
     const db = new DatabaseSync(dbPath);
     try {
       const rows = db
-        .prepare('SELECT id, title, cwd, tokens_used, archived, recency_at_ms FROM threads WHERE archived=0 ORDER BY recency_at_ms DESC')
+        .prepare('SELECT id, title, cwd, tokens_used, archived, recency_at_ms, approval_mode, first_user_message FROM threads WHERE archived=0 ORDER BY recency_at_ms DESC')
         .all();
       const found = [];
       for (const row of rows) {
         const recency = Number(row.recency_at_ms || 0);
         // 只回显最近 ACTIVE_WINDOW_MS 有活动的（= 正在跑/刚跑完）；recency 无效则跳过
         if (!recency || Date.now() - recency > ACTIVE_WINDOW_MS) continue;
+        // 统一解析（rollout 里取 firstPrompt/lastMessage/usage）
+        const info = parseSessionFile(row.id, 'codex', row.cwd || '') || {};
+        const title = row.title || info.firstPrompt || row.first_user_message || '';
         found.push({
           provider: 'codex',
           sessionId: row.id,
-          cwd: row.cwd || '',
-          title: row.title || '',
-          lastMessage: '',
+          cwd: row.cwd || info.cwd || '',
+          title,
+          lastMessage: info.lastMessage || '',
+          mode: row.approval_mode ? normalizeCodexMode(row.approval_mode) : null,
+          usage: info.usage || null,
           state: 'waiting_input', // Codex 线程存在 = 会话存在等输入，hook 事件精确更新
-          updatedAt: new Date(recency).toISOString(),
+          updatedAt: recency,
         });
       }
       return found;
@@ -250,6 +149,18 @@ function scanCodex() {
     console.log('[scanner] Codex threads 查询失败，回退 rollout 扫描:', err.message.slice(0, 80));
     return scanCodexFallback();
   }
+}
+
+/** Codex approval_mode → 归一化 mode */
+function normalizeCodexMode(raw) {
+  if (!raw) return null;
+  const m = String(raw).toLowerCase();
+  if (m.includes('plan')) return 'plan';
+  if (m.includes('auto')) return 'auto';
+  if (m.includes('accept')) return 'acceptEdits';
+  if (m.includes('bypass') || m.includes('dontask') || m.includes('yolo')) return 'bypass';
+  if (m.includes('ask') || m.includes('default') || m.includes('manual')) return 'ask';
+  return raw;
 }
 
 /** Codex 回退：rollout 文件扫描 */
@@ -266,17 +177,19 @@ function scanCodexFallback() {
         else if (e.name.endsWith('.jsonl') && e.name.includes('rollout-')) {
           const mtime = statSync(p).mtimeMs;
           if (Date.now() - mtime > ACTIVE_WINDOW_MS) continue;
-          const { sessionId, cwd, lastUserText } = parseCodexRollout(p);
-          const id = sessionId || e.name.replace('rollout-', '').replace('.jsonl', '');
+          // 文件名 rollout-<ts>-<uuid>.jsonl → uuid 是最后一段（parseSessionFile 尾部读不到 session_meta 时用）
+          const uuid = e.name.match(/rollout-.*-([0-9a-f-]+)\.jsonl$/)?.[1] || '';
+          const info = uuid ? (parseSessionFile(uuid, 'codex', '') || {}) : {};
+          const id = info.sessionId || uuid;
           if (!id) continue;
           found.push({
             provider: 'codex',
             sessionId: id,
-            cwd: cwd || '',
-            title: lastUserText,
-            lastMessage: '',
+            cwd: info.cwd || '',
+            title: info.firstPrompt || '',
+            lastMessage: info.lastMessage || '',
             state: 'running',
-            updatedAt: new Date(mtime).toISOString(),
+            updatedAt: mtime,
           });
         }
       }
@@ -315,30 +228,33 @@ function scanZCode() {
         }
       }
       if (!candidates.length) return [];
-      // 从 db 批量取候选会话的标题/cwd（用占位符批量查询，避免逐条往返）
+      // 从 db 批量取候选会话的标题/cwd/permission（用占位符批量查询，避免逐条往返）
       const ids = candidates.map((c) => c.sessionId);
       const placeholders = ids.map(() => '?').join(',');
       const rows = db
-        .prepare(`SELECT id, title, directory FROM session WHERE id IN (${placeholders})`)
+        .prepare(`SELECT id, title, directory, permission FROM session WHERE id IN (${placeholders})`)
         .all(...ids);
       const byId = new Map(rows.map((r) => [r.id, r]));
       const found = [];
       for (const c of candidates) {
         const row = byId.get(c.sessionId);
+        // 统一解析（usage / lastMessage / replyState / firstPrompt）
+        const info = parseSessionFile(c.sessionId, 'zcode', '') || {};
         // 找不到 db 记录也回显（rollout 文件存在 = 干过活）；db 兜底拿不到标题则留空
         // 状态按最后一条 model_io 的回复状态判定（done → idle，有工具调用 → running），
         // 而不是一律 waiting_input——AI 回复完成的会话不该显示"等待回复"
-        const parsed = parseZCodeRolloutFile(c.filePath, c.sessionId);
-        const replyState = parsed?.replyState;
-        const state = replyState === 'done' ? STATES.IDLE : replyState === 'running' ? STATES.RUNNING : STATES.WAITING_INPUT;
+        const state = info.replyState === 'done' ? STATES.IDLE : info.replyState === 'running' ? STATES.RUNNING : STATES.WAITING_INPUT;
+        const mode = parseZCodePermission(row?.permission);
         found.push({
           provider: 'zcode',
           sessionId: c.sessionId,
           cwd: row?.directory || '',
-          title: row?.title || '',
-          lastMessage: parsed?.lastMessage || '',
+          title: row?.title || info.firstPrompt || '',
+          lastMessage: info.lastMessage || '',
+          mode,
+          usage: info.usage || null,
           state,
-          updatedAt: new Date(c.mtime).toISOString(),
+          updatedAt: c.mtime,
         });
       }
       return found;
@@ -349,6 +265,25 @@ function scanZCode() {
     console.log('[scanner] ZCode session 查询失败，回退 rollout 扫描:', err.message.slice(0, 80));
     return scanZCodeFallback();
   }
+}
+
+/** ZCode db session.permission（JSON 字符串，如 {"mode":"build"}）→ 归一化 mode */
+export function parseZCodePermission(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (parsed && typeof parsed.mode === 'string') {
+      const m = parsed.mode.toLowerCase();
+      if (m.includes('plan')) return 'plan';
+      if (m.includes('auto')) return 'auto';
+      if (m.includes('accept')) return 'acceptEdits';
+      if (m.includes('bypass') || m.includes('dontask') || m.includes('yolo')) return 'bypass';
+      if (m.includes('build')) return 'auto'; // build = 自动构建/执行
+      if (m.includes('ask') || m.includes('default') || m.includes('manual')) return 'ask';
+      return parsed.mode;
+    }
+  } catch {}
+  return null;
 }
 
 /** ZCode 回退：rollout 文件扫描 */
@@ -362,17 +297,17 @@ function scanZCodeFallback() {
       const filePath = path.join(root, f);
       const mtime = statSync(filePath).mtimeMs;
       if (Date.now() - mtime > ACTIVE_WINDOW_MS) continue;
-      const { sessionId, lastUserText } = parseZCodeRollout(filePath);
-      const id = sessionId || f.replace('model-io-sess_', '').replace('.jsonl', '');
-      if (!id) continue;
+      const sid = 'sess_' + f.replace('model-io-sess_', '').replace('.jsonl', '');
+      const info = parseSessionFile(sid, 'zcode', '') || {};
+      if (!sid) continue;
       found.push({
         provider: 'zcode',
-        sessionId: id,
+        sessionId: sid,
         cwd: '',
-        title: lastUserText,
-        lastMessage: '',
+        title: info.firstPrompt || '',
+        lastMessage: info.lastMessage || '',
         state: 'running',
-        updatedAt: new Date(mtime).toISOString(),
+        updatedAt: mtime,
       });
     }
   } catch {}
@@ -396,6 +331,8 @@ export function scanAndRestore() {
       project: s.cwd ? projectFromCwd(s.cwd) : '',
       title: s.title,
       lastMessage: s.lastMessage,
+      mode: s.mode || null,
+      usage: s.usage || null,
       // 扫描源的 updatedAt 是各家的真实活动时间（Claude=内容对话时间戳；Codex/ZCode=recency/mtime），
       // 直接用于排序，不再用 Date.now() 假造"现在"——否则服务重启会把所有回显会话顶到最前
       updatedAt: Date.parse(s.updatedAt) || Date.now(),

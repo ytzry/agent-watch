@@ -2,7 +2,7 @@ import { existsSync, watchFile, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { hub } from './hub.js';
-import { findSessionFile, parseZCodeRollout, parseClaudeTranscript, parseCodexRollout, computeUsage } from './session-files.js';
+import { findSessionFile, parseSessionFile, computeUsage } from './session-files.js';
 
 /**
  * 文件 tail 轮询：监听各 agent 的 rollout/transcript 文件变化，
@@ -11,7 +11,8 @@ import { findSessionFile, parseZCodeRollout, parseClaudeTranscript, parseCodexRo
  * 注意：会话"是否结束"完全由 hook 事件驱动（Stop / SessionEnd / StopFailure），
  * 这里**不做任何时间判定**——文件停止增长不代表会话结束（可能只是长思考/挂起）。
  *
- * 解析逻辑与 hook 即时同步共用 src/session-files.js（文件定位 + 解析 + usage 标准化）。
+ * 解析统一走 session-files.parseSessionFile（委托给各 adapter 的 parseSessionFile），
+ * 与 hook 即时同步、启动扫描共用同一份解析逻辑。
  *
  * 各家文件：
  *  - ZCode:   ~/.zcode/cli/rollout/model-io-sess_<sid>.jsonl
@@ -32,11 +33,7 @@ export function watchSessionFile(sessionId, provider, cwd) {
   if (!filePath) return;
 
   const parse = () => {
-    let result = null;
-    if (provider === 'zcode') {
-      result = parseZCodeRollout(filePath, sessionId);
-    } else if (provider === 'claude-code') result = parseClaudeTranscript(filePath, sessionId);
-    else result = parseCodexRollout(filePath, sessionId);
+    const result = parseSessionFile(sessionId, provider, cwd);
     if (!result) return;
 
     const s = hub.sessions.get(sessionId);
@@ -47,6 +44,8 @@ export function watchSessionFile(sessionId, provider, cwd) {
     // 标题：ai-title > 首条 user prompt；只补空（db 官方标题 / hook 标题优先，不覆盖）
     if (result.aiTitle && !s.title) patch.title = result.aiTitle;
     else if (result.firstPrompt && !s.title) patch.title = result.firstPrompt;
+    // mode：文件里有（Claude permission-mode 行）且会话还没有 → 补上
+    if (result.mode && !s.mode) patch.mode = result.mode;
     if (result.lastMessage) patch.lastMessage = result.lastMessage;
     if (Object.keys(patch).length) hub.update(sessionId, patch);
     // 状态：按最后一条 model_io 的回复状态收敛（AI 回复完成 → idle；有工具调用 → running）。

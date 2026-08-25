@@ -20,7 +20,8 @@
 import {
   EVENTS, getSessionId, getCwd, getToolInput, getToolName,
   getLastAssistantMessage, getPermissionMode, getToolResponse,
-} from '../index.js';
+} from '../common.js';
+import { readFileTail } from '../../session-utils.js';
 
 const eventMap = {
   SessionStart: EVENTS.SESSION_START,
@@ -60,6 +61,91 @@ function parsePlanTodos(toolResponse) {
   });
 }
 
+/* ---------- rollout 解析（usage / 标题 / mode / 回复状态） ---------- */
+
+/**
+ * 解析 Codex rollout（Responses API 结构）。只读尾部（usage 在最新记录，避免大文件 OOM）。
+ * 实测字段（2026-08，v0.119+）：
+ *  - usage 在 event_msg 的 payload.type === 'token_count' 的 payload.info：
+ *      total_token_usage（全会话累计）/ last_token_usage（最近一次请求）
+ *      { input_tokens, cached_input_tokens, output_tokens, total_tokens, ... }
+ *    cached_input_tokens 已含在 input_tokens 中（input = 非缓存 + 缓存）。
+ *    ⚠ info 可能为 null（多次实测），此时跳过该记录。
+ *  - 标题/首条 user：response_item 的 payload.type === 'message' 且 role === 'user'，
+ *    content[].type === 'input_text'（实测；非 text）
+ *  - 最后 assistant 文字：response_item message role=assistant content[].type === 'output_text'
+ *  - 会话最后一条消息也可能是 event_msg payload.type === 'agent_message' 的 message（旁白）
+ *  - mode 不在 rollout 里，由 scanner 从 threads.approval_mode 传入（parseSessionFile 不解析）
+ */
+export function parseRollout(filePath) {
+  const body = readFileTail(filePath, 512 * 1024);
+  const lines = body.split('\n').filter(Boolean);
+  let lastUsage = null; // 最近一次有效 token_count 的 last_token_usage
+  let lastText = '';
+  let firstUserText = '';
+  let cwd = '';
+  let sessionId = '';
+  let modelContextWindow = null;
+  // 命中率：累计所有 token_count 事件（input 含 cached，分母=总输入即可）
+  let sumInput = 0, sumCached = 0;
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (!sessionId && obj.type === 'session_meta' && obj.payload?.id) sessionId = obj.payload.id;
+      if (!cwd && obj.type === 'session_meta' && obj.payload?.cwd) cwd = obj.payload.cwd;
+      if (obj.type === 'event_msg' && obj.payload?.type === 'token_count' && obj.payload.info) {
+        const info = obj.payload.info;
+        const u = info.last_token_usage || info.total_token_usage || null;
+        if (u && (u.input_tokens ?? 0) > 0) {
+          lastUsage = {
+            inputTokens: u.input_tokens ?? null,
+            outputTokens: u.output_tokens ?? null,
+            totalTokens: u.total_tokens ?? null,
+            cacheReadTokens: u.cached_input_tokens ?? null,
+            contextTokens: u.input_tokens ?? null,
+          };
+          modelContextWindow = info.model_context_window ?? null;
+          sumInput += u.input_tokens ?? 0;
+          sumCached += u.cached_input_tokens ?? 0;
+        }
+      }
+      if (obj.type === 'response_item' && obj.payload?.type === 'message') {
+        const p = obj.payload;
+        const texts = (p.content || [])
+          .filter((c) => c?.type === 'output_text' || c?.type === 'input_text')
+          .map((c) => c.text)
+          .join(' ');
+        if (p.role === 'assistant') {
+          if (texts.trim()) lastText = texts.trim().slice(0, 200);
+        } else if (p.role === 'user' && texts.trim() && !firstUserText) {
+          firstUserText = texts.trim().slice(0, 120);
+        }
+      }
+      // 旁白（agent_message）也计入最后消息（Codex 会话的最后一条常是它）
+      if (obj.type === 'event_msg' && obj.payload?.type === 'agent_message' && obj.payload?.message) {
+        lastText = String(obj.payload.message).slice(0, 200);
+      }
+    } catch {}
+  }
+  // 命中率 = cached / 总输入（input_tokens 已含 cached）。cache_creation 无此概念。
+  const hitDenom = sumInput;
+  if (!lastUsage && !firstUserText && !lastText && !cwd && !sessionId) return null;
+  return {
+    usage: lastUsage ? {
+      ...lastUsage,
+      cacheHitRate: hitDenom > 0 ? sumCached / hitDenom : null,
+      // Codex 的 model_context_window 本身就是数值窗口（实测 258400），直接透传；非法时回落 200k
+      maxTokens: modelContextWindow || 200000,
+      sessionTotalTokens: null, // Codex 无单次 vs 累计区分：last_token_usage 已是单次
+    } : null,
+    firstPrompt: firstUserText || null,
+    lastMessage: lastText || null,
+    cwd,
+    sessionId,
+    replyState: null, // Codex rollout 无明确的"回复完成"信号（task_complete 可作完成依据）
+  };
+}
+
 const adapter = {
   name: 'codex',
   displayName: 'Codex',
@@ -67,6 +153,22 @@ const adapter = {
   hookConfigPath: '~/.codex/config.toml',
   transcriptDir: '~/.codex/sessions',
   transcriptPattern: (sessionId) => `${sessionId}.jsonl`,
+
+  /** 统一文件解析：Codex rollout → SessionFileInfo */
+  parseSessionFile(filePath) {
+    const r = parseRollout(filePath);
+    if (!r) return null;
+    return {
+      usage: r.usage,
+      firstPrompt: r.firstPrompt,
+      lastMessage: r.lastMessage,
+      cwd: r.cwd || '',
+      sessionId: r.sessionId || '',
+      mode: null, // 由 scanner 从 threads.approval_mode 传入
+      lastActivityAt: 0,
+      replyState: null,
+    };
+  },
 
   normalize(payload, rawEventName) {
     const sid = getSessionId(payload);

@@ -5,7 +5,8 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { hub, STATES } from '../hub.js';
 import { EVENTS, getAdapter, listAdapters, getEventName } from '../adapters/index.js';
-import { findSessionFile, parseZCodeRollout, parseClaudeTranscript, parseCodexRollout, parseTodoTail, computeUsage } from '../session-files.js';
+import { findSessionFile, parseSessionFile, computeUsage, parseTodoTail } from '../session-files.js';
+import { parseZCodePermission } from '../scanner.js';
 /**
  * 从 cwd 推断项目名：向上找 .git 目录，取仓库名；没有则取 basename。
  * 注意：hook 运行时拿 cwd 即可，不必读磁盘（避免 hook 阻塞）。这里做纯路径推断。
@@ -24,8 +25,8 @@ export function projectFromCwd(cwd) {
 
 const router = Router();
 
-// ZCode 官方会话 db 的轻量缓存查询（key: sessionId → { title, directory }）
-// hook payload 缺失 cwd/title 时兜底用；查不到返回 null（不阻塞事件）
+// ZCode 官方会话 db 的轻量缓存查询（key: sessionId → { title, directory, permission }）
+// hook payload 缺失 cwd/title/mode 时兜底用；查不到返回 null（不阻塞事件）
 const zcodeMetaCache = new Map();
 const ZCODE_DB = path.join(homedir(), '.zcode/cli/db/db.sqlite');
 // 复用连接：hook 事件是热路径，避免每次查标题都重新打开 db；失败时置空下次重开
@@ -38,10 +39,16 @@ function zcodeSessionMeta(sessionId) {
     if (!zcodeDb && existsSync(ZCODE_DB)) zcodeDb = new DatabaseSync(ZCODE_DB);
     if (zcodeDb) {
       // 参数绑定查询，会话 ID 里的连字符是普通值，不会被当成 SQL 语法
-      const row = zcodeDb.prepare('SELECT title, directory FROM session WHERE id = ?').get(sessionId);
+      const row = zcodeDb.prepare('SELECT title, directory, permission FROM session WHERE id = ?').get(sessionId);
       const title = row?.title?.trim();
       const directory = row?.directory?.trim();
-      if (title || directory) meta = { title: title || null, directory: directory || null };
+      if (title || directory || row?.permission) {
+        meta = {
+          title: title || null,
+          directory: directory || null,
+          mode: parseZCodePermission(row?.permission),
+        };
+      }
     }
   } catch {
     zcodeDb = null; // 连接失效（如 db 被重建/锁定）→ 下次事件重新打开
@@ -53,7 +60,7 @@ function zcodeSessionMeta(sessionId) {
 }
 
 /** POST /api/hooks/:provider — 统一 hook 接收入口 */
-router.post('/hooks/:provider', async (req, res) => {
+router.post('/hooks/:provider', (req, res) => {
   const { provider } = req.params;
   const payload = req.body || {};
   const rawEvent = getEventName(payload);
@@ -70,7 +77,8 @@ router.post('/hooks/:provider', async (req, res) => {
   }
 
   try {
-    const adapter = await getAdapter(provider);
+    const adapter = getAdapter(provider);
+    if (!adapter) return res.status(404).json({ ok: false, error: `unknown provider: ${provider}` });
     const ev = adapter.normalize(payload, rawEvent);
     if (!ev) {
       // 不认识的原始事件，静默 200（hook 调用方不关心）
@@ -115,13 +123,20 @@ export function applyEvent(ev) {
     const meta = zcodeSessionMeta(ev.sessionId);
     if (meta?.title) patch.title = meta.title;
   }
+  // mode 补齐：hook payload 没带（ZCode/Codex hook 通常不带 permission_mode）时，
+  // ZCode 从 db session.permission（JSON 字符串 {"mode":"..."}）回查，Claude 由文件解析补
+  if (!s.mode && ev.provider === 'zcode') {
+    const meta = zcodeSessionMeta(ev.sessionId);
+    if (meta?.mode) patch.mode = meta.mode;
+  }
   // 非 ZCode 或 db 无标题时才用 ev.title 兜底（Claude/Codex 的 ev.title 是真实描述；ZCode 是 prompt）
   if (ev.title && !s.title && !patch.title && ev.provider !== 'zcode') patch.title = ev.title;
   if (ev.mode) patch.mode = ev.mode;
   if (ev.lastMessage) patch.lastMessage = ev.lastMessage;
 
-  // hook 触发时同步读本地会话文件，即时刷新上下文用量 / 缓存命中率 / 标题 / todo。
+  // hook 触发时同步读本地会话文件，即时刷新上下文用量 / 缓存命中率 / 标题 / todo / mode。
   // 数据以文件为准（比 hook payload 完整：payload 不含 usage），读取必须快速且容错。
+  // 解析统一走 session-files.parseSessionFile（委托给各 adapter 的 parseSessionFile）。
   // 用 setImmediate 异步合并：hook 响应先回（不阻塞 agent 调用方），解析结果随后广播。
   if (ev.event === EVENTS.STOP || ev.event === EVENTS.PROMPT || ev.event === EVENTS.ASK_USER || ev.event === EVENTS.PERMISSION_REQUEST) {
     const provider = ev.provider;
@@ -129,13 +144,8 @@ export function applyEvent(ev) {
     const cwd = patch.cwd || ev.cwd || s.cwd;
     setImmediate(() => {
       try {
-        const filePath = findSessionFile(sessionId, provider, cwd);
-        if (!filePath) return; // 无 rollout 文件（非模型会话）→ 跳过
-        // 三家解析器统一返回 { usage?, firstPrompt?, lastMessage?, aiTitle? }（ZCode 无 ai-title/lastMessage）
-        let result = null;
-        if (provider === 'zcode') result = parseZCodeRollout(filePath, sessionId);
-        else if (provider === 'claude-code') result = parseClaudeTranscript(filePath, sessionId);
-        else if (provider === 'codex') result = parseCodexRollout(filePath, sessionId);
+        // 统一解析（usage / firstPrompt / lastMessage / aiTitle / mode / replyState）
+        const result = parseSessionFile(sessionId, provider, cwd);
         if (!result?.usage) return;
         const patch2 = {};
         const usage2 = computeUsage(result.usage);
@@ -143,10 +153,12 @@ export function applyEvent(ev) {
         // 标题：ai-title > 首条 user prompt；都没有保留现有。ZCode 用 db 标题（已由 applyEvent 同步补过）
         if (result.aiTitle) patch2.title = result.aiTitle;
         else if (result.firstPrompt && !hub.sessions.get(sessionId)?.title) patch2.title = result.firstPrompt;
+        // mode：文件里有（Claude permission-mode 行）且会话还没有 → 补上
+        if (result.mode && !hub.sessions.get(sessionId)?.mode) patch2.mode = result.mode;
         if (result.lastMessage) patch2.lastMessage = result.lastMessage;
         // todo：hook payload 无 todo 时从文件补（TodoWrite 的 tool_input 落盘在 rollout）
         if (provider === 'zcode' && !ev.todo) {
-          const todo = parseTodoTail(filePath);
+          const todo = parseTodoTail(findSessionFile(sessionId, provider, cwd));
           if (todo) patch2.todo = todo;
         }
         if (Object.keys(patch2).length) hub.update(sessionId, patch2);
