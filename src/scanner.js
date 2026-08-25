@@ -23,6 +23,7 @@ import { hub, STATES } from './hub.js';
 import { parseSessionFile } from './session-files.js';
 import { readFileTail } from './session-utils.js';
 import { projectFromCwd } from './hooks/ingest.js';
+import { latestZcodeTurn } from './zcode-turns.js';
 
 // 只回显最近 5 分钟内有活动的会话（= 当前正在跑的任务；更早的一律视为历史，不回显）
 const ACTIVE_WINDOW_MS = 5 * 60 * 1000;
@@ -243,7 +244,17 @@ function scanZCode() {
         // 找不到 db 记录也回显（rollout 文件存在 = 干过活）；db 兜底拿不到标题则留空
         // 状态按最后一条 model_io 的回复状态判定（done → idle，有工具调用 → running），
         // 而不是一律 waiting_input——AI 回复完成的会话不该显示"等待回复"
-        const state = info.replyState === 'done' ? STATES.IDLE : info.replyState === 'running' ? STATES.RUNNING : STATES.WAITING_INPUT;
+        let state = info.replyState === 'done' ? STATES.IDLE : info.replyState === 'running' ? STATES.RUNNING : STATES.WAITING_INPUT;
+        // 轮次真值修正：手动中断不写 model_io 也不发 hook（zcode-turns.js 顶部说明），
+        // rollout 尾部会永远停在 tool-calls → 重启后误恢复成"执行中"。
+        // turn_usage 最后一行若结束于最后一次模型 I/O 之后，它才是会话的最终状态
+        // （正在跑的轮次：上一轮 completed_at 早于本轮新写入的 model_io → 守卫不通过，保持 running）
+        const turn = latestZcodeTurn(c.sessionId);
+        if (turn && turn.completedAtMs >= (info.lastActivityAt || 0)) {
+          if (turn.status === 'cancelled') state = STATES.ENDED;
+          else if (turn.status === 'error') state = STATES.ERROR;
+          else if (turn.status === 'completed') state = STATES.IDLE;
+        }
         const mode = parseZCodePermission(row?.permission);
         found.push({
           provider: 'zcode',

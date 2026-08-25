@@ -9,6 +9,7 @@ import ingestRouter, { applyEvent, projectFromCwd } from './src/hooks/ingest.js'
 import { EVENTS, listAdapters } from './src/adapters/index.js';
 import { watchSessionFile } from './src/tailer.js';
 import { scanAndRestore } from './src/scanner.js';
+import { startZcodeTurnPoller } from './src/zcode-turns.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -47,5 +48,7 @@ server.listen(config.port, config.host, () => {
   console.log(`[agent-watch] 已注册适配器: ${listAdapters().join(', ')}`);
   // 启动时扫描回显活跃会话（服务重启 / 启动前就在跑的会话）
   scanAndRestore();
+  // ZCode 轮次状态轮询：手动中断不发 hook，靠官方 db turn_usage 的 cancelled 行收敛状态
+  startZcodeTurnPoller();
   // 会话状态完全由 hook 事件驱动（Stop / SessionEnd / StopFailure），不做时间清扫
 });

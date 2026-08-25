@@ -80,6 +80,7 @@ agent-watch/
 │   ├── ws.js                  # WebSocket 广播
 │   ├── tailer.js              # rollout/transcript 文件 tail（上下文用量）
 │   ├── scanner.js             # 启动扫描：恢复历史活跃会话（回显正在跑的任务）
+│   ├── zcode-turns.js         # ZCode 轮次轮询：官方 db turn_usage 识别手动中断（中断不发 hook）
 │   ├── routes.js
 │   ├── hooks/ingest.js        # POST /api/hooks/:provider
 │   └── adapters/              # ★ 扩展点：新增 agent 加目录
@@ -155,4 +156,4 @@ created → running → awaiting_approval → running
 - **上下文用量**（参照 ccusage 开源方案）：Claude 按 `input + output + cache_creation + cache_read` 累计，进度条显示**当前上下文**（最近一次请求 input）；ZCode rollout 的 usage
 - **会话标题**（参照开源优先级）：`/rename`/ai-title > 首条 user prompt > 项目名 > 短 ID
 - **首版不做回复注入**（仅监控 + 播报），后续可扩展 ZCode 的 PermissionRequest 注入通道
-- **ZCode 无 SessionEnd hook**（事件白名单不含），会话结束通过 Stop / 日志兜底
+- **ZCode 手动中断不发任何 hook**（zcode.cjs 源码验证：Stop hook 只派发在回复正常完成路径，取消路径无 hook、rollout 也不补记录）。运行中靠轮询官方 db `turn_usage` 表收敛：`cancelled_by_user=1` → 已结束，`completed` → 已完成，`error` → 错误；启动回显也按它修正，被中断的会话不再误恢复成"执行中"
