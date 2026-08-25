@@ -401,6 +401,33 @@
         on:input="onVoiceRate($event)"
       />
     </div>
+    <!-- 语音播报每状态开关 -->
+    <o-fill
+      :value="voiceRows"
+      fill-key="key"
+    >
+      <div class="row">
+        <div class="label">
+          <div class="name">{{$data.name}}</div>
+          <div class="desc">{{$data.desc}}</div>
+        </div>
+        <div
+          class="aw-switch"
+          class:on="$data.enabled"
+          on:click="$host.toggleVoice($data.key)"
+        ></div>
+        <button
+          class="aw-btn aw-btn-secondary"
+          on:click="$host.previewVoice($data.key)"
+        >
+          <i
+            class="aw-ic"
+            data-lucide="play"
+          ></i
+          >试听
+        </button>
+      </div>
+    </o-fill>
   </o-if>
 
   <!-- 提醒音模式：每状态一个音效 + 开关 -->
@@ -452,6 +479,8 @@
       const {
         getVoiceSettings,
         setVoiceSetting,
+        setVoiceEnabled,
+        previewVoiceState,
         getZhSystemVoices,
         previewVoice,
         EDGE_VOICES,
@@ -481,6 +510,7 @@
         data: {
           masterVolume: 0.7,
           statusRows: [],
+          voiceRows: [],
           mode: "sound",
           voiceRate: 1,
           systemVoices: [],
@@ -497,6 +527,7 @@
             this.renderVoiceOptions();
           });
           this.refreshRows();
+          this.refreshVoiceRows();
           this.renderIconsAfterPaint();
           try {
             createIcons();
@@ -559,11 +590,29 @@
               ...s[key],
             }));
           },
+          /** 刷新语音播报每状态开关行 */
+          refreshVoiceRows() {
+            const s = getVoiceSettings();
+            this.voiceRows = Object.keys(STATUS_DEFS).map((key) => ({
+              key,
+              ...STATUS_DEFS[key],
+              enabled: s.enabled[key] !== false,
+            }));
+          },
           toggle(key) {
             const row = this.statusRows.find((r) => r.key === key);
             if (!row) return;
             setSetting(key, { enabled: !row.enabled });
             this.refreshRows();
+          },
+          toggleVoice(key) {
+            const row = this.voiceRows.find((r) => r.key === key);
+            if (!row) return;
+            setVoiceEnabled(key, !row.enabled);
+            this.refreshVoiceRows();
+          },
+          previewVoice(key) {
+            previewVoiceState(key);
           },
           onSoundChange(e, key) {
             // aw-select change：ofa emit 把数据挂 e.data（非 CustomEvent detail）
@@ -599,6 +648,8 @@
           setMode(mode) {
             this.mode = mode;
             setAnnounceMode(mode);
+            // 刷新语音播报开关行（o-if 重建后数据绑定最新）
+            this.refreshVoiceRows();
             // o-if 切换会重建设置区块 DOM（语音下拉 + data-lucide 图标占位），
             // 下拉由 renderVoiceOptions 填充；图标等渲染完成后补
             this.renderVoiceOptions();

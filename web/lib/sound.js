@@ -231,6 +231,19 @@ const DEFAULT_VOICE_SETTINGS = {
   rate: 1, // 0.5 ~ 2
 };
 
+/** 语音播报每状态默认开关（与提醒音默认 enabled 保持一致） */
+const DEFAULT_VOICE_ENABLED = {
+  awaiting_approval: true,
+  waiting_input: true,
+  idle: true,
+  background_task: false,
+  compacting: false,
+  error: true,
+  ended: false,
+  ws_disconnected: true,
+  ws_connected: true,
+};
+
 /** 状态 → 播报短语（与 STATUS_KEYS 对应，未知状态不播） */
 const STATUS_PHRASES = {
   awaiting_approval: '等待你批准',
@@ -247,9 +260,14 @@ const STATUS_PHRASES = {
 function loadVoiceSettings() {
   try {
     const raw = localStorage.getItem(VOICE_SETTINGS_KEY);
-    return raw ? { ...DEFAULT_VOICE_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_VOICE_SETTINGS };
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      ...DEFAULT_VOICE_SETTINGS,
+      ...parsed,
+      enabled: { ...DEFAULT_VOICE_ENABLED, ...parsed.enabled },
+    };
   } catch {
-    return { ...DEFAULT_VOICE_SETTINGS };
+    return { ...DEFAULT_VOICE_SETTINGS, enabled: { ...DEFAULT_VOICE_ENABLED } };
   }
 }
 
@@ -283,16 +301,36 @@ export function buildSpeakText(title, state) {
 const lastSpoken = new Map();
 const SPEAK_DEBOUNCE_MS = 15000;
 
-/** 播报 title + 状态（受防抖控制；语音模式即播报，无独立开关） */
+/** 播报 title + 状态（受每状态开关 + 防抖控制） */
 export function speakStatus(title, state, sessionId) {
   const text = buildSpeakText(title, state);
   if (!text) return;
+  if (!isVoiceEnabled(state)) return;
   const key = `${sessionId || 'sys'}|${state}`;
   const now = Date.now();
   if (now - (lastSpoken.get(key) || 0) < SPEAK_DEBOUNCE_MS) return;
   lastSpoken.set(key, now);
   if (lastSpoken.size > 200) lastSpoken.clear();
   speakText(text);
+}
+
+/** 查询语音播报某状态的开关 */
+export function isVoiceEnabled(state) {
+  return loadVoiceSettings().enabled[state] !== false;
+}
+
+/** 设置语音播报某状态的开关 */
+export function setVoiceEnabled(state, val) {
+  const s = loadVoiceSettings();
+  s.enabled[state] = !!val;
+  saveVoiceSettings(s);
+  return s;
+}
+
+/** 试听某状态的播报短语（不受该状态开关约束，与提醒音 row 试听一致） */
+export function previewVoiceState(state) {
+  const text = buildSpeakText('', state);
+  if (text) speakText(text);
 }
 
 let currentAudio = null; // 正在播的在线 mp3，新播报顶掉旧播报
