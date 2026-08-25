@@ -98,6 +98,7 @@ function scanClaude() {
             title: info.aiTitle || info.firstPrompt || '',
             lastMessage: info.lastMessage || '',
             mode: info.mode || null,
+            model: info.model || '',
             usage: info.usage || null,
             state: info.replyState === 'done' ? 'idle' : (info.replyState === 'running' ? 'running' : 'waiting_input'),
             // updatedAt 用内容最后对话时间戳（mtime 会被非对话动作刷新，只作粗筛）
@@ -137,6 +138,7 @@ function scanCodex() {
           title,
           lastMessage: info.lastMessage || '',
           mode: row.approval_mode ? normalizeCodexMode(row.approval_mode) : null,
+          model: info.model || '',
           usage: info.usage || null,
           state: 'waiting_input', // Codex 线程存在 = 会话存在等输入，hook 事件精确更新
           updatedAt: recency,
@@ -263,6 +265,7 @@ function scanZCode() {
           title: row?.title || info.firstPrompt || '',
           lastMessage: info.lastMessage || '',
           mode,
+          model: info.model || '',
           usage: info.usage || null,
           state,
           updatedAt: c.mtime,
@@ -343,6 +346,7 @@ export function scanAndRestore() {
       title: s.title,
       lastMessage: s.lastMessage,
       mode: s.mode || null,
+      model: s.model || '',
       usage: s.usage || null,
       // 扫描源的 updatedAt 是各家的真实活动时间（Claude=内容对话时间戳；Codex/ZCode=recency/mtime），
       // 直接用于排序，不再用 Date.now() 假造"现在"——否则服务重启会把所有回显会话顶到最前

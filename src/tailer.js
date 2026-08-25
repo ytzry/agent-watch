@@ -46,6 +46,8 @@ export function watchSessionFile(sessionId, provider, cwd) {
     else if (result.firstPrompt && !s.title) patch.title = result.firstPrompt;
     // mode：文件里有（Claude permission-mode 行）且会话还没有 → 补上
     if (result.mode && !s.mode) patch.mode = result.mode;
+    // model：文件里的模型名（会话当前使用）→ 补上
+    if (result.model && !s.model) patch.model = result.model;
     if (result.lastMessage) patch.lastMessage = result.lastMessage;
     if (Object.keys(patch).length) hub.update(sessionId, patch);
     // 状态：按最后一条 model_io 的回复状态收敛（AI 回复完成 → idle；有工具调用 → running）。

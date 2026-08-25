@@ -12,7 +12,7 @@
  *     usage: { inputTokens, outputTokens, totalTokens, contextTokens, cacheReadTokens,
  *              maxTokens, sessionTotalTokens?, cacheHitRate, reasoningTokens? },
  *     aiTitle, firstPrompt, lastMessage, cwd, sessionId,
- *     mode, lastActivityAt, replyState, replyStateAt,
+ *     mode, model, lastActivityAt, replyState, replyStateAt,
  *   }
  * 语义约定：
  *  - contextTokens / totalTokens = 当前上下文（最近一次请求），进度条用

@@ -163,7 +163,7 @@ export function parseRollout(filePath) {
     cacheHitRate: hitDenom > 0 ? sumCacheRead / hitDenom : null,
   } : null;
   if (!usage && !firstPrompt && !replyState && !lastText && !sessionId) return null;
-  return { usage, firstPrompt: firstPrompt || null, lastMessage: lastText || null, sessionId, replyState, replyStateAt, lastActivityAt: lastTs };
+  return { usage, firstPrompt: firstPrompt || null, lastMessage: lastText || null, sessionId, replyState, replyStateAt, lastActivityAt: lastTs, model: modelId || null };
 }
 
 /** 从 request.body（JSON 字符串或对象）的 messages 里提取首条真实用户输入（标题兜底）。
@@ -214,6 +214,7 @@ const adapter = {
       sessionId: r.sessionId || '',
       cwd: '', // ZCode rollout 无 cwd 字段，由 db 提供
       mode: null, // 由 db session.permission 提供
+      model: r.model || '',
       lastActivityAt: r.lastActivityAt || 0,
       replyState: r.replyState || null,
       replyStateAt: r.replyStateAt || 0,

@@ -149,6 +149,8 @@ export function applyEvent(ev) {
         else if (result.firstPrompt && !hub.sessions.get(sessionId)?.title) patch2.title = result.firstPrompt;
         // mode：文件里有（Claude permission-mode 行）且会话还没有 → 补上
         if (result.mode && !hub.sessions.get(sessionId)?.mode) patch2.mode = result.mode;
+        // model：文件里的模型名（会话当前使用）→ 补上
+        if (result.model && !hub.sessions.get(sessionId)?.model) patch2.model = result.model;
         if (result.lastMessage) patch2.lastMessage = result.lastMessage;
         // todo：hook payload 无 todo 时从文件补（TodoWrite 的 tool_input 落盘在 rollout）
         if (provider === 'zcode' && !ev.todo) {
@@ -242,11 +244,11 @@ export function applyEvent(ev) {
 
     case EVENTS.SUBAGENT_START:
       // 子代理启动：会话仍 running（不打断），只记录；子代理是任务内部动作，不算对话活动
-      hub.update(ev.sessionId, { ...patch, state: STATES.RUNNING }, { stateChangedBy: 'subagent_start' });
+      hub.update(ev.sessionId, { ...patch, subagentRunning: (s.subagentRunning || 0) + 1, state: STATES.RUNNING }, { stateChangedBy: 'subagent_start' });
       break;
 
     case EVENTS.SUBAGENT_STOP:
-      hub.update(ev.sessionId, { ...patch, state: STATES.RUNNING }, { stateChangedBy: 'subagent_stop' });
+      hub.update(ev.sessionId, { ...patch, subagentRunning: Math.max(0, (s.subagentRunning || 0) - 1), state: STATES.RUNNING }, { stateChangedBy: 'subagent_stop' });
       break;
 
     case EVENTS.SESSION_END:

@@ -196,6 +196,7 @@ const adapter = {
       lastMessage: r.lastMessage || null,
       cwd: r.cwd || '',
       mode: r.mode || null,
+      model: r.modelId || '',
       lastActivityAt: r.lastActivityAt || 0,
       replyState: r.replyState || null,
       replyStateAt: r.replyStateAt || 0,

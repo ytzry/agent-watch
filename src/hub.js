@@ -71,6 +71,8 @@ class Hub extends EventEmitter {
         // 永远霸占组首，刚对话完的项目反而排不上去。
         lastActivityAt: Date.now(),
         endedAt: null,
+        model: '', // 会话在用的模型名（从会话文件/rollout 解析）
+        subagentRunning: 0, // 正在运行的子代理数
         subagents: [], // 子代理用量快照
         usage: null, // { inputTokens, outputTokens, totalTokens, maxTokens, pct }
         ...initial,
@@ -220,7 +222,9 @@ class Hub extends EventEmitter {
       todo: s.todo,
       lastMessage: s.lastMessage,
       lastTool: s.lastTool,
+      model: s.model,
       usage: s.usage,
+      subagentRunning: s.subagentRunning,
       subagents: s.subagents,
       startedAt: s.startedAt,
       updatedAt: s.updatedAt,
