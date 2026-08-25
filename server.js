@@ -10,6 +10,7 @@ import { EVENTS, listAdapters } from './src/adapters/index.js';
 import { watchSessionFile } from './src/tailer.js';
 import { scanAndRestore } from './src/scanner.js';
 import { startZcodeTurnPoller } from './src/zcode-turns.js';
+import { synthesizeEdgeTts } from './src/edge-tts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -23,6 +24,36 @@ app.use('/api', ingestRouter);
 // 简单 REST（前端快照 / 状态）
 app.get('/api/state', (_req, res) => res.json(hub.snapshot()));
 app.get('/api/health', (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
+
+// ── 语音播报合成：edge-tts（微软免费神经语音）。
+// 失败/无网络 → 503 + fallback 标记，前端自动降级到浏览器 speechSynthesis。
+// 短文本合成一次约几百 ms，同文本 5 分钟内命中内存缓存。
+const ttsCache = new Map(); // `text|voice|rate` -> Buffer
+const TTS_VOICES = new Set([
+  'zh-CN-XiaoxiaoNeural', 'zh-CN-YunxiNeural', 'zh-CN-YunjianNeural', 'zh-CN-XiaoyiNeural',
+  'en-US-EmmaMultilingualNeural', 'en-US-AvaMultilingualNeural',
+]);
+app.get('/api/tts', async (req, res) => {
+  const text = String(req.query.text ?? '').trim().slice(0, 200);
+  const voice = String(req.query.voice ?? 'zh-CN-XiaoxiaoNeural');
+  const rate = String(req.query.rate ?? '+0%');
+  if (!text) return res.status(400).json({ error: 'text required' });
+  if (!TTS_VOICES.has(voice) || !/^[+-]\d+%$/.test(rate)) {
+    return res.status(400).json({ error: 'invalid voice/rate' });
+  }
+  const key = `${text}|${voice}|${rate}`;
+  const cached = ttsCache.get(key);
+  if (cached) return res.type('audio/mpeg').set('Cache-Control', 'public, max-age=300').send(cached);
+  try {
+    const audio = await synthesizeEdgeTts(text, { voice, rate });
+    if (ttsCache.size >= 100) ttsCache.clear();
+    ttsCache.set(key, audio);
+    res.type('audio/mpeg').set('Cache-Control', 'public, max-age=300').send(audio);
+  } catch (err) {
+    console.warn(`[edge-tts] 合成失败，前端将降级本地语音: ${err.message}`);
+    res.status(503).json({ error: err.message, fallback: 'speechSynthesis' });
+  }
+});
 
 // 静态前端
 app.use(express.static(path.join(__dirname, 'web')));

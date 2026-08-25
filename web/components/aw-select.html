@@ -2,6 +2,7 @@
   <style>
     :host {
       display: inline-block;
+      max-width: 100%; /* 窄视口下限制在容器内，长 label 走省略号 */
     }
     /* shadcn select-trigger 视觉：触发按钮 + chevron */
     .trigger {
@@ -24,14 +25,22 @@
       min-width: 90px;
       width: 100%;
       box-sizing: border-box;
+      font-family: inherit;
+      text-align: left;
     }
     .trigger:hover {
       background: hsl(var(--input) / 0.85);
     }
-    .trigger:focus-within {
+    .trigger.open,
+    .trigger:focus-visible {
       outline: none;
       border-color: hsl(var(--ring));
       box-shadow: 0 0 0 2px hsl(var(--ring) / 0.3);
+    }
+    .trigger > span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .chevron {
       width: 16px;
@@ -39,6 +48,10 @@
       color: hsl(var(--muted-foreground));
       flex-shrink: 0;
       pointer-events: none;
+      transition: transform 0.15s;
+    }
+    .trigger.open .chevron {
+      transform: rotate(180deg);
     }
     .wrap {
       position: relative;
@@ -46,7 +59,7 @@
       align-items: center;
       width: 100%;
     }
-    /* 透明原生 select 覆盖（接收点击/键盘，视觉由 trigger 呈现） */
+    /* 移动端（触屏无 hover）：退化系统选择器，桌面隐藏不拦截点击 */
     .native {
       position: absolute;
       inset: 0;
@@ -58,19 +71,126 @@
       background: transparent;
       appearance: none;
       -webkit-appearance: none;
+      pointer-events: none; /* 桌面走自定义 trigger/面板，native 不拦截 */
+    }
+    .native.active {
+      pointer-events: auto;
+      position: static;
+      opacity: 1;
+      display: block;
+      min-height: 36px;
+      padding: 0 1.75rem 0 0.7rem;
+      border-radius: var(--radius);
+      border: 1px solid hsl(var(--input));
+      background-color: hsl(var(--input));
+      color: hsl(var(--foreground));
+      font-size: 0.82rem;
+      font-weight: 500;
+      width: 100%;
+      box-sizing: border-box;
+      font-family: inherit;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 0.55rem center;
+      background-size: 16px;
+    }
+    .trigger.hidden {
+      display: none;
+    }
+    /* shadcn select-content：定位卡片面板 */
+    .panel {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 100%;
+      max-height: 220px;
+      overflow-y: auto;
+      padding: 4px;
+      background: hsl(var(--card));
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+      box-shadow: 0 4px 20px rgb(0 0 0 / 0.3);
+      z-index: 50;
+      box-sizing: border-box;
+      display: none;
+    }
+    .panel.open {
+      display: block;
+    }
+    .panel.flip {
+      top: auto;
+      bottom: calc(100% + 4px);
+    }
+    .panel::-webkit-scrollbar {
+      width: 6px;
+    }
+    .panel::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .panel::-webkit-scrollbar-thumb {
+      background: hsl(var(--border));
+      border-radius: 9999px;
+    }
+    /* shadcn select-item：选项行（右侧打勾） */
+    .item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 30px;
+      padding: 0 8px;
+      border-radius: var(--radius-sm);
+      color: hsl(var(--card-foreground));
+      font-size: 0.82rem;
+      cursor: pointer;
+      white-space: nowrap;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.1s;
+    }
+    .item:hover,
+    .item.hovered {
+      background: hsl(var(--secondary));
+    }
+    .item.checked {
+      font-weight: 500;
+    }
+    .check {
+      width: 14px;
+      height: 14px;
+      color: hsl(var(--primary));
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      visibility: hidden;
+    }
+    .item.checked .check {
+      visibility: visible;
     }
   </style>
 
   <div class="wrap">
-    <button class="trigger" tabindex="-1" aria-hidden="true">
+    <button class="trigger" class:hidden="mobile" type="button" aria-haspopup="listbox" attr:aria-expanded="open ? 'true' : 'false'"
+      on:click="toggle" on:keydown="onTriggerKey">
       <span>{{selectedLabel}}</span>
       <span class="chevron"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
     </button>
-    <select class="native" attr:name="name" on:change="onNativeChange">
+    <select class="native" class:active="mobile" attr:name="name" on:change="onNativeChange">
       <o-fill :value="optionList">
         <option attr:value="$data.value" attr:selected="$data.value === $host.value">{{$data.label}}</option>
       </o-fill>
     </select>
+    <div class="panel" class:open="open">
+      <o-fill :value="optionList" fill-key="value">
+        <div class="item" class:checked="$data.value === $host.value"
+          class:hovered="$data.value === $host.hoveredValue"
+          on:click="$host.pick($data.value)"
+          on:mouseenter="$host.hoveredValue = $data.value">
+          <span>{{$data.label}}</span>
+          <span class="check"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+        </div>
+      </o-fill>
+    </div>
   </div>
 
   <script>
@@ -80,16 +200,33 @@
         attrs: {
           name: '',
           value: '',
-          // options 字符串："beep:哔哔,ding:叮,chime:风铃"
+          // options 字符串："beep:哔哔;ding:叮;chime:风铃"（label 可含逗号，故用分号分项）
           options: '',
         },
         data: {
           selectedLabel: '',
           optionList: [],
+          open: false,
+          hoveredValue: '',
+          mobile: false,
         },
         ready() {
           this.parseOptions();
           this.updateLabel();
+          this._updateMobile();
+          this._onResize = () => this._updateMobile();
+          window.addEventListener('resize', this._onResize);
+          // 外部点击关闭：composedPath 覆盖 shadow 内元素（ele.contains 不穿透 shadow root）
+          this._onDocClick = (e) => {
+            if (!this.open) return;
+            const path = e.composedPath?.() || [];
+            if (path.indexOf(this.ele) === -1) this.close();
+          };
+          document.addEventListener('click', this._onDocClick);
+        },
+        detached() {
+          document.removeEventListener('click', this._onDocClick);
+          window.removeEventListener('resize', this._onResize);
         },
         watch: {
           value() {
@@ -101,25 +238,101 @@
           },
         },
         proto: {
+          /** 触屏无 hover 设备（手机/平板）→ 退化系统选择器；桌面/可悬停设备用自定义面板 */
+          _updateMobile() {
+            try {
+              this.mobile = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+            } catch {
+              this.mobile = false;
+            }
+          },
+          onNativeChange(e) {
+            this.value = e.target.value;
+            this.updateLabel();
+            this.emit('change', { data: { value: this.value }, bubbles: true, composed: true });
+          },
           parseOptions() {
             const raw = this.options || '';
             this.optionList = raw
-              .split(',')
+              .split(';')
               .filter(Boolean)
               .map((pair) => {
-                const [value, label] = pair.split(':');
-                return { value, label: label || value };
+                const i = pair.indexOf(':');
+                const value = i === -1 ? pair : pair.slice(0, i);
+                return { value, label: i === -1 ? value : pair.slice(i + 1) };
               });
           },
           updateLabel() {
             const opt = this.optionList.find((o) => o.value === this.value);
             this.selectedLabel = opt ? opt.label : '';
           },
-          onNativeChange(e) {
-            this.value = e.target.value;
+          /** 开合；open 变更会引起 shadow 重渲染，定位延后到渲染稳定后执行 */
+          toggle() {
+            if (this.open) {
+              this.close();
+            } else {
+              this.open = true;
+              this.hoveredValue = this.value;
+              setTimeout(() => this.positionPanel(), 0);
+            }
+          },
+          /** 面板定位：视口/页面容器底部放不下向上弹；右缘溢出（视口或页面容器）则左移 clamp */
+          positionPanel() {
+            const root = this.ele.shadowRoot;
+            const panel = root.querySelector('.panel');
+            if (!panel) return;
+            // 右缘钳制基准：视口右缘与页面容器内容右缘，取更严格者（容器 max-width 居中时面板会先顶到容器）
+            panel.style.marginLeft = '';
+            const rect = panel.getBoundingClientRect();
+            const pageEl = this.ele.getRootNode?.().host || document.querySelector('o-page');
+            const pageRight = pageEl ? pageEl.getBoundingClientRect().right - 8 : window.innerWidth - 8;
+            const limit = Math.min(window.innerWidth - 8, pageRight);
+            const overflow = rect.right - limit;
+            if (overflow > 0) {
+              const triggerW = root.querySelector('.trigger').getBoundingClientRect().width;
+              panel.style.marginLeft = `-${Math.min(overflow, rect.width - triggerW)}px`;
+            }
+            // 底部放不下时向上弹（重排后再量，含左移后的最终位置）
+            const finalRect = panel.getBoundingClientRect();
+            const flip = finalRect.bottom + 8 > window.innerHeight;
+            panel.classList.toggle('flip', flip);
+          },
+          close() {
+            this.open = false;
+          },
+          pick(value) {
+            this.value = value;
             this.updateLabel();
+            this.close();
             // ofa emit 第二参是选项对象，数据放 data 里
-            this.emit('change', { data: { value: this.value }, bubbles: true, composed: true });
+            this.emit('change', { data: { value }, bubbles: true, composed: true });
+          },
+          move(delta) {
+            const list = this.optionList;
+            if (!list.length) return;
+            let idx = list.findIndex((o) => o.value === this.hoveredValue);
+            if (idx === -1) idx = list.findIndex((o) => o.value === this.value);
+            idx = (idx + delta + (idx === -1 ? 1 : 0) + list.length) % list.length;
+            this.hoveredValue = list[idx].value;
+            const panel = this.shadow.$('.panel').ele;
+            const el = panel.querySelector('.item.hovered');
+            if (el) el.scrollIntoView({ block: 'nearest' });
+          },
+          // 键盘统一在 trigger 上处理（焦点始终在 trigger；panel 无焦点元素收不到 keydown）
+          onTriggerKey(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              // 面板已开：Enter/Space 选中当前高亮项（shadcn 语义）
+              if (this.open && this.hoveredValue) this.pick(this.hoveredValue);
+              else this.toggle();
+            } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault();
+              if (this.open) this.move(e.key === 'ArrowDown' ? 1 : -1);
+              else this.toggle();
+            } else if (e.key === 'Escape' && this.open) {
+              e.preventDefault();
+              this.close();
+            }
           },
         },
       };

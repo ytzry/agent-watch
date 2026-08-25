@@ -52,7 +52,9 @@
       font-size: 0.82rem;
       flex-shrink: 0;
       -webkit-tap-highlight-color: transparent;
-      transition: background 0.15s, color 0.15s;
+      transition:
+        background 0.15s,
+        color 0.15s;
     }
     .header a:active {
       background: hsl(var(--secondary));
@@ -76,7 +78,7 @@
     }
     .row .label {
       flex: 1;
-      min-width: 140px;
+      min-width: 0; /* 与 home 一致：允许收缩，宽度靠 gap 自然排布，不撑破窄视口 */
     }
     .row .label .name {
       font-size: 0.9rem;
@@ -112,24 +114,73 @@
       padding: 0.45rem 0.9rem;
       min-height: 36px;
       cursor: pointer;
-      transition: background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+      transition:
+        background 0.15s,
+        border-color 0.15s,
+        color 0.15s,
+        opacity 0.15s;
       -webkit-tap-highlight-color: transparent;
       user-select: none;
       white-space: nowrap;
       font-family: inherit;
     }
-    .aw-btn:active { opacity: 0.9; }
+    .aw-btn:active {
+      opacity: 0.9;
+    }
     .aw-btn:focus-visible {
       outline: none;
-      box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.5);
+      box-shadow:
+        0 0 0 2px hsl(var(--background)),
+        0 0 0 4px hsl(var(--ring) / 0.5);
     }
-    .aw-btn .aw-ic { width: 15px; height: 15px; }
+    .aw-btn .aw-ic {
+      width: 15px;
+      height: 15px;
+    }
     .aw-btn-secondary {
       background: hsl(var(--secondary));
       color: hsl(var(--secondary-foreground));
       border-color: hsl(var(--border));
     }
-    .aw-btn-secondary:hover { background: hsl(var(--secondary) / 0.8); }
+    .aw-btn-secondary:hover {
+      background: hsl(var(--secondary) / 0.8);
+    }
+
+    /* Segmented（播报方式切换，两段互斥按钮） */
+    .aw-seg {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+      overflow: hidden;
+      flex-shrink: 0;
+      align-self: center;
+    }
+    .aw-seg-btn {
+      padding: 0.4rem 0.85rem;
+      font-size: 0.8rem;
+      min-height: 34px;
+      background: transparent;
+      color: hsl(var(--muted-foreground));
+      border: none;
+      cursor: pointer;
+      transition:
+        background 0.15s,
+        color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      white-space: nowrap;
+      font-family: inherit;
+    }
+    .aw-seg-btn + .aw-seg-btn {
+      border-left: 1px solid hsl(var(--border));
+    }
+    .aw-seg-btn.on {
+      background: hsl(var(--primary));
+      color: hsl(var(--primary-foreground));
+    }
+    .aw-seg-btn:active {
+      opacity: 0.9;
+    }
 
     /* Switch（shadcn switch 组件，滑块垂直居中） */
     .aw-switch {
@@ -149,9 +200,11 @@
       box-sizing: border-box;
       vertical-align: middle;
     }
-    .aw-switch.on { background: hsl(var(--primary)); }
+    .aw-switch.on {
+      background: hsl(var(--primary));
+    }
     .aw-switch::after {
-      content: '';
+      content: "";
       position: absolute;
       top: 50%;
       left: 2px;
@@ -163,51 +216,16 @@
       transition: transform 0.2s;
       transform: translateY(-50%);
     }
-    .aw-switch.on::after { transform: translateY(-50%) translateX(20px); }
+    .aw-switch.on::after {
+      transform: translateY(-50%) translateX(20px);
+    }
 
-    /* Select（shadcn select 风格） */
-    /* Select（shadcn select 风格：trigger 样式 + ChevronDown 图标，箭头用 wrap ::after 画） */
+    /* Select 容器（aw-select 组件自带 trigger/面板样式） */
     .select-wrap {
       position: relative;
       display: inline-flex;
       align-items: center;
       flex-shrink: 0;
-    }
-    /* ChevronDown 图标（shadcn: size-4 opacity-50 text-muted-foreground） */
-    .select-wrap::after {
-      content: '';
-      position: absolute;
-      right: 0.65rem;
-      top: 50%;
-      width: 6px;
-      height: 6px;
-      border-right: 1.5px solid hsl(var(--muted-foreground));
-      border-bottom: 1.5px solid hsl(var(--muted-foreground));
-      opacity: 0.5;
-      transform: translateY(-70%) rotate(45deg);
-      pointer-events: none;
-    }
-    /* Trigger 视觉（shadcn: h-9 px-3 rounded-md border-input bg-transparent，隐藏原生箭头） */
-    .aw-select {
-      background-color: hsl(var(--input) / 0.3);
-      color: hsl(var(--foreground));
-      border: 1px solid hsl(var(--border));
-      border-radius: var(--radius);
-      padding: 0 1.75rem 0 0.75rem;
-      font-size: 0.82rem;
-      height: 36px;
-      line-height: 36px;
-      align-self: center;
-      box-sizing: border-box;
-      vertical-align: middle;
-      width: 100%;
-      appearance: none;
-      -webkit-appearance: none;
-    }
-    .aw-select:focus-visible {
-      outline: none;
-      border-color: hsl(var(--ring));
-      box-shadow: 0 0 0 3px hsl(var(--ring) / 0.5);
     }
 
     /* Slider */
@@ -220,7 +238,9 @@
       cursor: pointer;
       flex-shrink: 0;
     }
-    .aw-slider:focus { outline: none; }
+    .aw-slider:focus {
+      outline: none;
+    }
     .aw-slider::-webkit-slider-runnable-track {
       height: 6px;
       border-radius: 9999px;
@@ -265,85 +285,271 @@
       background: hsl(var(--muted-foreground) / 0.5);
     }
     :host {
-      scrollbar-width: thin;           /* Firefox */
+      scrollbar-width: thin; /* Firefox */
       scrollbar-color: hsl(var(--border)) transparent;
     }
   </style>
 
   <div class="header">
     <h1>声音播报设置</h1>
-    <a href="./home.html" olink>
-      <i class="aw-ic" data-lucide="arrow-left"></i>返回
+    <a
+      href="./home.html"
+      olink
+    >
+      <i
+        class="aw-ic"
+        data-lucide="arrow-left"
+      ></i
+      >返回
     </a>
   </div>
 
+  <div class="row">
+    <i
+      class="aw-ic"
+      data-lucide="megaphone"
+    ></i>
+    <div class="label">
+      <div class="name">播报方式</div>
+    </div>
+    <div class="aw-seg">
+      <button
+        class="aw-seg-btn"
+        class:on="mode === 'sound'"
+        on:click="setMode('sound')"
+      >
+        提醒音
+      </button>
+      <button
+        class="aw-seg-btn"
+        class:on="mode === 'voice'"
+        on:click="setMode('voice')"
+      >
+        语音播报
+      </button>
+    </div>
+  </div>
+
   <div class="row master">
-    <i class="aw-ic" data-lucide="volume-2"></i>
+    <i
+      class="aw-ic"
+      data-lucide="volume-2"
+    ></i>
     <div class="label">
       <div class="name">全局音量</div>
-      <div class="desc">所有播报音量</div>
+      <div class="desc">当前播报方式下的音量</div>
     </div>
-    <input class="aw-slider" type="range" min="0" max="1" step="0.05" :value="masterVolume"
-      on:input="onMasterVolume($event)" />
-    <button class="aw-btn aw-btn-secondary" on:click="previewMaster">
-      <i class="aw-ic" data-lucide="play"></i>试听
+    <input
+      class="aw-slider"
+      type="range"
+      min="0"
+      max="1"
+      step="0.05"
+      :value="masterVolume"
+      on:input="onMasterVolume($event)"
+    />
+    <button
+      class="aw-btn aw-btn-secondary"
+      on:click="previewMaster"
+    >
+      <i
+        class="aw-ic"
+        data-lucide="play"
+      ></i
+      >试听
     </button>
   </div>
 
-  <o-fill :value="statusRows" fill-key="key">
+  <!-- 语音播报模式：title + 状态。在线 edge-tts 优先，失败/无网络自动降级系统语音 -->
+  <o-if :value="mode === 'voice'">
     <div class="row">
       <div class="label">
-        <div class="name">{{$data.name}}</div>
-        <div class="desc">{{$data.desc}}</div>
+        <div class="name">播报语音</div>
+        <div class="desc">「会话标题 + 状态」语音播报</div>
       </div>
-      <div class="aw-switch" class:on="$data.enabled" on:click="$host.toggle($data.key)"></div>
-      <div class="select-wrap">
-        <select class="aw-select" on:change="$host.onSoundChange($event, $data.key)">
-          <option value="beep" attr:selected="$data.sound === 'beep'">哔哔</option>
-          <option value="ding" attr:selected="$data.sound === 'ding'">叮</option>
-          <option value="chime" attr:selected="$data.sound === 'chime'">风铃</option>
-          <option value="alert" attr:selected="$data.sound === 'alert'">提醒</option>
-          <option value="success" attr:selected="$data.sound === 'success'">成功</option>
-          <option value="error" attr:selected="$data.sound === 'error'">错误</option>
-        </select>
+      <div
+        class="select-wrap"
+        style="flex: 1; min-width: 0"
+      >
+        <aw-select
+          id="voice-select"
+          on:change="onVoiceChange($event)"
+        ></aw-select>
       </div>
-      <button class="aw-btn aw-btn-secondary" on:click="$host.preview($data.key)">
-        <i class="aw-ic" data-lucide="play"></i>试听
+      <button
+        class="aw-btn aw-btn-secondary"
+        on:click="previewVoiceBtn"
+      >
+        <i
+          class="aw-ic"
+          data-lucide="play"
+        ></i
+        >试听
       </button>
     </div>
-  </o-fill>
+    <div class="row">
+      <div class="label">
+        <div class="name">播报语速</div>
+      </div>
+      <input
+        class="aw-slider"
+        type="range"
+        min="0.5"
+        max="2"
+        step="0.1"
+        :value="voiceRate"
+        on:input="onVoiceRate($event)"
+      />
+    </div>
+  </o-if>
+
+  <!-- 提醒音模式：每状态一个音效 + 开关 -->
+  <o-if :value="mode === 'sound'">
+    <o-fill
+      :value="statusRows"
+      fill-key="key"
+    >
+      <div class="row">
+        <div class="label">
+          <div class="name">{{$data.name}}</div>
+          <div class="desc">{{$data.desc}}</div>
+        </div>
+        <div
+          class="aw-switch"
+          class:on="$data.enabled"
+          on:click="$host.toggle($data.key)"
+        ></div>
+        <div class="select-wrap">
+          <aw-select
+            options="beep:哔哔;ding:叮;chime:风铃;alert:提醒;success:成功;error:错误"
+            :value="$data.sound"
+            on:change="$host.onSoundChange($event, $data.key)"
+          ></aw-select>
+        </div>
+        <button
+          class="aw-btn aw-btn-secondary"
+          on:click="$host.preview($data.key)"
+        >
+          <i
+            class="aw-ic"
+            data-lucide="play"
+          ></i
+          >试听
+        </button>
+      </div>
+    </o-fill>
+  </o-if>
 
   <script>
     export default async ({ load }) => {
-      const { getSettings, getMasterVolume, setSetting, setMasterVolume, playSound } = await load('../lib/sound.js');
-      const { createIcons } = await load('../lib/icons.js');
+      const {
+        getSettings,
+        getMasterVolume,
+        setSetting,
+        setMasterVolume,
+        playSound,
+      } = await load("../lib/sound.js");
+      const {
+        getVoiceSettings,
+        setVoiceSetting,
+        getZhSystemVoices,
+        previewVoice,
+        EDGE_VOICES,
+        getAnnounceMode,
+        setAnnounceMode,
+      } = await load("../lib/sound.js");
+      const { createIcons } = await load("../lib/icons.js");
+      const { isSmallScreen, applyRotate, resetRotate } = await load("../lib/landscape.js");
+      await load("../components/aw-select.html");
 
       const STATUS_DEFS = {
-        awaiting_approval: { name: '等待审批', desc: 'agent 请求工具权限时' },
-        waiting_input: { name: '等待回复', desc: 'agent 提问需要你回复时' },
-        idle: { name: 'AI 回复完成', desc: 'agent 完成一轮回复时' },
-        background_task: { name: '后台任务', desc: 'agent 在跑后台任务时' },
-        compacting: { name: '上下文压缩', desc: 'agent 压缩上下文时' },
-        error: { name: '出错', desc: 'agent 回合出错时' },
-        ended: { name: '会话结束', desc: 'agent 会话结束时' },
-        ws_disconnected: { name: '连接断开', desc: '与服务器的 WebSocket 断链时' },
-        ws_connected: { name: '连接恢复', desc: 'WebSocket 重新连接成功时' },
+        awaiting_approval: { name: "等待审批", desc: "agent 请求工具权限时" },
+        waiting_input: { name: "等待回复", desc: "agent 提问需要你回复时" },
+        idle: { name: "AI 回复完成", desc: "agent 完成一轮回复时" },
+        background_task: { name: "后台任务", desc: "agent 在跑后台任务时" },
+        compacting: { name: "上下文压缩", desc: "agent 压缩上下文时" },
+        error: { name: "出错", desc: "agent 回合出错时" },
+        ended: { name: "会话结束", desc: "agent 会话结束时" },
+        ws_disconnected: {
+          name: "连接断开",
+          desc: "与服务器的 WebSocket 断链时",
+        },
+        ws_connected: { name: "连接恢复", desc: "WebSocket 重新连接成功时" },
       };
 
       return {
         data: {
           masterVolume: 0.7,
           statusRows: [],
+          mode: "sound",
+          voiceRate: 1,
+          systemVoices: [],
         },
         attached() {
           this.masterVolume = getMasterVolume();
+          this.mode = getAnnounceMode();
+          const v = getVoiceSettings();
+          this.voiceRate = v.rate;
+          // 语音下拉：在线语音同步填充；系统中文语音加载完成后补齐
+          this.renderVoiceOptions();
+          getZhSystemVoices((list) => {
+            this.systemVoices = list;
+            this.renderVoiceOptions();
+          });
           this.refreshRows();
+          this.renderIconsAfterPaint();
           try {
             createIcons();
             setTimeout(() => createIcons(), 300);
           } catch {}
+          // 全屏横屏同步：从首页全屏横屏状态进入时保持旋转；全屏退出/转屏时清理
+          this._landscapeSync = () => {
+            // 用组件自身宿主而非 querySelector：路由切换瞬间文档可能同时有新旧 o-page
+            const h = this.ele;
+            if (!h) return;
+            const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+            if (inFs && isSmallScreen() && window.innerHeight > window.innerWidth) {
+              h.setAttribute("data-force-landscape", "");
+              applyRotate(h);
+            } else if (h.hasAttribute("data-force-landscape")) {
+              h.removeAttribute("data-force-landscape");
+              resetRotate(h);
+            }
+          };
+          document.addEventListener("fullscreenchange", this._landscapeSync);
+          document.addEventListener("webkitfullscreenchange", this._landscapeSync);
+          window.addEventListener("orientationchange", this._landscapeSync);
+          this._landscapeSync();
+        },
+        detached() {
+          if (this._landscapeSync) {
+            document.removeEventListener("fullscreenchange", this._landscapeSync);
+            document.removeEventListener("webkitfullscreenchange", this._landscapeSync);
+            window.removeEventListener("orientationchange", this._landscapeSync);
+          }
         },
         proto: {
+          /** 渲染语音下拉（在线 + 系统语音，label 带来源后缀），保持当前选中。
+           * o-if 按 mode 异步渲染，首次调用时组件可能未挂载 → 延迟重试 */
+          renderVoiceOptions(tries = 0) {
+            const sel = this.shadow.$("#voice-select")?.ele;
+            if (!sel) {
+              if (tries < 10)
+                setTimeout(() => this.renderVoiceOptions(tries + 1), 50);
+              return;
+            }
+            const edge = EDGE_VOICES.map(
+              (x) => `${x.id}:${x.label}（在线）`,
+            ).join(";");
+            const local = this.systemVoices
+              .map((x) => `${x.id}:${x.label}`)
+              .join(";");
+            sel.setAttribute(
+              "options",
+              [edge, local].filter(Boolean).join(";"),
+            );
+            sel.setAttribute("value", getVoiceSettings().voice || "");
+          },
           /** 从 localStorage 重新读设置并刷新 statusRows（新数组引用，触发 o-fill 重渲染） */
           refreshRows() {
             const s = getSettings();
@@ -360,7 +566,8 @@
             this.refreshRows();
           },
           onSoundChange(e, key) {
-            const val = e && e.target ? e.target.value : null;
+            // aw-select change：ofa emit 把数据挂 e.data（非 CustomEvent detail）
+            const val = e?.data?.value;
             if (!val) return;
             setSetting(key, { sound: val });
             this.refreshRows();
@@ -371,11 +578,41 @@
             if (row) playSound(row.sound, this.masterVolume);
           },
           previewMaster() {
-            playSound('ding', this.masterVolume);
+            playSound("ding", this.masterVolume);
           },
           onMasterVolume(e) {
             this.masterVolume = Number(e.target.value);
             setMasterVolume(this.masterVolume);
+          },
+          onVoiceChange(e) {
+            const val = e?.data?.value;
+            if (!val) return;
+            setVoiceSetting({ voice: val });
+          },
+          previewVoiceBtn() {
+            previewVoice();
+          },
+          onVoiceRate(e) {
+            this.voiceRate = Number(e.target.value);
+            setVoiceSetting({ rate: this.voiceRate });
+          },
+          setMode(mode) {
+            this.mode = mode;
+            setAnnounceMode(mode);
+            // o-if 切换会重建设置区块 DOM（语音下拉 + data-lucide 图标占位），
+            // 下拉由 renderVoiceOptions 填充；图标等渲染完成后补
+            this.renderVoiceOptions();
+            this.renderIconsAfterPaint();
+          },
+          /** o-if 渲染完成后替换 data-lucide 占位（双 rAF：渲染帧 + 稳定帧） */
+          renderIconsAfterPaint() {
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                try {
+                  createIcons();
+                } catch {}
+              }),
+            );
           },
         },
       };
