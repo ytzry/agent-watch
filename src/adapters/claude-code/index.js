@@ -52,23 +52,29 @@ function normalizeMode(raw) {
  * 实测字段（2026-08）：
  *  - usage 在 assistant message 的 message.usage（input_tokens/output_tokens/
  *    cache_read_input_tokens/cache_creation.ephemeral_5m|1h_input_tokens）
+ *  - 模型在 message.model（assistant 行）/ model（user 行）；代理路由时是真实模型
+ *    （如 deepseek-v4-flash），'<synthetic>' 等占位值跳过 → 用于查真实上下文窗口
+ *  - 当前上下文 = 最近一次请求的 input + cache_read + cache_creation。
+ *    缓存命中场景下 input 只含未命中的新增部分（实测 input=67 / cache_read=516352），
+ *    单看 input 会严重低估，且旧逻辑的 ≥500 过滤会取到更早的陈旧记录
  *  - 标题在 ai-title 行的 aiTitle 字段
  *  - 权限模式在 permission-mode 行的 permissionMode 字段（default/auto/plan/acceptEdits/...）
- *  - transcript 行**不含 assistant 模型字段**（只有 user 行带 model），模型从 usage 附近不可得，
- *    上下文窗口回退 200k
  */
 export function parseTranscript(filePath) {
   const body = readFileTail(filePath, 1 * 1024 * 1024);
   const lines = body.split('\n').filter(Boolean);
   let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheCreate = 0;
-  let lastContextInput = 0; // 最近一次请求的上下文大小（input）
+  let lastRecordCtx = 0; // 最近一次有用量记录的真实上下文快照（input+cache_read+cache_create）
   let lastText = '';
   let aiTitle = '';
   let firstPrompt = '';
   let cwd = '';
   let mode = null; // 最近一次 permission-mode 行
+  let modelId = ''; // 最近一次非占位模型名（容量查询用）
   let lastTs = 0; // 最后一条 user/assistant 行时间戳（活跃判定用）
   let replyState = null; // done / running / null
+  let replyStateAt = 0; // 决定 replyState 的那行的时间戳（hub 陈旧守卫用）
+  const isPlaceholderModel = (m) => !m || String(m).startsWith('<');
   for (const line of lines) {
     try {
       const obj = JSON.parse(line);
@@ -115,17 +121,28 @@ export function parseTranscript(filePath) {
         totalOutput += output;
         totalCacheRead += cr;
         totalCacheCreate += cc;
-        // 最近一次有实际上下文的请求（input >= 500 表示真实上下文）
-        if (input >= 500) lastContextInput = input;
-        // 回复状态：assistant 消息后面跟 tool_use → 还在干活；最后一条 assistant 是文字 → 完成
-        // 简化：整文件里出现 tool_use 且最后一条 assistant 无文字 → running；否则最后是文字 → done
+        // 当前上下文 = 最近一次请求的 input + cache_read + cache_creation（快照语义，同 ZCode/Codex）。
+        // 不设 ≥500 过滤——收尾请求可能只剩几十个非缓存 input（其余全在 cache_read 里）
+        if (input + cc + cr > 0) lastRecordCtx = input + cc + cr;
       }
-      // 最后一条 assistant 是否带文字（决定 replyState）
+      // 模型名（容量查询）：assistant 行 message.model / user 行 model；'<synthetic>' 等占位跳过。
+      // 一直覆盖到最后一行 → 会话中途换模型时以当前模型为准
+      {
+        const m = obj.message?.model ?? obj.model;
+        if (!isPlaceholderModel(m)) modelId = m;
+      }
+      // 最后一条 assistant 是否带文字（决定 replyState）；同时记下该行时间戳——
+      // 新 prompt 提交后、新消息落盘前，尾部仍是上一轮的文字回复（done），
+      // 没有时间戳就无法分辨"真完成"和"上一轮遗留"
       if (obj.type === 'assistant' && obj.message?.content) {
         const c = obj.message.content;
         const hasText = Array.isArray(c) ? c.some((x) => x.type === 'text') : typeof c === 'string';
         if (hasText) replyState = 'done';
         else if (Array.isArray(c) && c.some((x) => x.type === 'tool_use')) replyState = 'running';
+        if (replyState && obj.timestamp) {
+          const t = Date.parse(obj.timestamp);
+          if (!isNaN(t)) replyStateAt = t;
+        }
       }
     } catch {}
   }
@@ -133,24 +150,21 @@ export function parseTranscript(filePath) {
   // 命中率分母 = 非缓存输入 + 缓存读取（Claude 的 input_tokens 不包含 cache_read，分开计数）。
   // cache_creation 是本次写入的冷启动 token，不计入命中率（它属于成本，不属于命中）。
   const hitDenom = totalInput + totalCacheRead;
-  const usage = totalTokens ? {
+  const usage = lastRecordCtx ? {
     inputTokens: totalInput,
     outputTokens: totalOutput,
     cacheReadTokens: totalCacheRead,
     cacheCreateTokens: totalCacheCreate,
-    // 当前上下文 = 最近一次请求的 input（进度条用这个）；total 是会话累计（参考）
-    // 实测：Claude 的 input_tokens 是逐条**累计值**（每条 assistant 的 usage 是全会话累计），
-    // 所以 lastContextInput 已经是"累计上下文"，用它当 contextTokens 会偏大——
-    // 这里直接暴露累计值，由下游决定；进度条语义对齐 ZCode/Codex（单次请求上下文）
-    // 但我们无法从 transcript 恢复"单次"，故 contextTokens 用最近一条的 input（=累计上下文）
-    totalTokens: lastContextInput || totalInput,
-    contextTokens: lastContextInput || totalInput,
+    // 当前上下文 = 最近一次请求快照（input+cache_read+cache_create），进度条用这个；
+    // sessionTotalTokens 是全会话流量累计（参考值，口径同 ccusage）
+    totalTokens: lastRecordCtx,
+    contextTokens: lastRecordCtx,
     sessionTotalTokens: totalTokens,
-    // 缓存命中率 = cache_read / (input + cache_read + cache_create)，范围 0-1
+    // 缓存命中率 = cache_read / (input + cache_read)，范围 0-1
     cacheHitRate: hitDenom > 0 ? totalCacheRead / hitDenom : null,
   } : null;
   if (!usage && !aiTitle && !firstPrompt && !lastText && !mode && !lastTs) return null;
-  return { usage, aiTitle, firstPrompt, lastMessage: lastText || null, cwd, mode, lastActivityAt: lastTs, replyState };
+  return { usage, aiTitle, firstPrompt, lastMessage: lastText || null, cwd, mode, modelId, lastActivityAt: lastTs, replyState, replyStateAt };
 }
 
 const adapter = {
@@ -174,7 +188,8 @@ const adapter = {
     return {
       usage: r.usage ? {
         ...r.usage,
-        maxTokens: contextWindowFor(r.modelId || undefined), // Claude transcript 无模型 → 200k
+        // transcript 里能拿到真实模型（代理路由时是实际模型）→ 查真实窗口；查不到回退 200k
+        maxTokens: contextWindowFor(r.modelId || undefined),
       } : null,
       aiTitle: r.aiTitle || null,
       firstPrompt: r.firstPrompt || null,
@@ -183,6 +198,7 @@ const adapter = {
       mode: r.mode || null,
       lastActivityAt: r.lastActivityAt || 0,
       replyState: r.replyState || null,
+      replyStateAt: r.replyStateAt || 0,
     };
   },
 

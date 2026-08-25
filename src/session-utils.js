@@ -5,6 +5,8 @@
  *  - 文本抽取（string/数组 content 统一）
  */
 import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
 
 /** 读文件尾部最多 maxBytes（从最后一个完整行开始） */
 export function readFileTail(filePath, maxBytes) {
@@ -28,7 +30,22 @@ export function readFileTail(filePath, maxBytes) {
 
 /* ---------- 上下文窗口 ---------- */
 
-const ZCODE_CATALOG_DIR = '/Applications/ZCode.app/Contents/Resources/model-providers';
+// ZCode model catalog 可能所在的目录（按平台探测，全部探测、合并结果）。
+// 此前只写死 macOS 的 /Applications 路径，Windows 上永远读不到，
+// 目录里没有的模型只能落到启发式表或 200k 兜底 → 容量显示不准。
+function zcodeCatalogDirs() {
+  const dirs = [];
+  const appdata = process.env.LOCALAPPDATA;
+  if (appdata) {
+    dirs.push(path.join(appdata, 'Programs', 'ZCode', 'resources', 'model-providers'));
+    dirs.push(path.join(appdata, 'Programs', 'AutoGLM', 'resources', 'model-providers'));
+    dirs.push(path.join(appdata, 'ZCode', 'resources', 'model-providers'));
+  }
+  dirs.push('/Applications/ZCode.app/Contents/Resources/model-providers');
+  dirs.push(path.join(homedir(), '.zcode', 'cli', 'model-providers'));
+  return dirs.filter((d) => existsSync(d));
+}
+
 let zcodeContextCache = null; // { modelId -> contextWindow }
 
 /** 加载 ZCode 模型目录，构建 modelId → contextWindow 映射（缓存） */
@@ -36,27 +53,32 @@ function loadZCodeContextWindows() {
   if (zcodeContextCache) return zcodeContextCache;
   const cache = {};
   try {
-    const dir = ZCODE_CATALOG_DIR;
-    if (!existsSync(dir)) return cache;
-    const files = readdirSync(dir).filter((f) => f.endsWith('.json'));
-    for (const f of files) {
+    for (const dir of zcodeCatalogDirs()) {
+      let files = [];
       try {
-        const catalog = JSON.parse(readFileSync(pathJoin(dir, f), 'utf8'));
-        const providers = catalog.providers || [];
-        for (const p of providers) {
-          const models = p.models || p.modelList || [];
-          const walk = (m) => {
-            if (!m || typeof m !== 'object') return;
-            const cw = m.contextWindow || m.context_window || m.contextLength;
-            const id = m.modelId || m.id || m.name;
-            if (cw && id) cache[id] = cw;
-            if (Array.isArray(m.models)) m.models.forEach(walk);
-            else if (m.models && typeof m.models === 'object') Object.values(m.models).forEach(walk);
-          };
-          if (Array.isArray(models)) models.forEach(walk);
-          else if (models && typeof models === 'object') Object.values(models).forEach(walk);
-        }
-      } catch {}
+        files = readdirSync(dir).filter((f) => f.endsWith('.json'));
+      } catch {
+        continue;
+      }
+      for (const f of files) {
+        try {
+          const catalog = JSON.parse(readFileSync(path.join(dir, f), 'utf8'));
+          const providers = catalog.providers || [];
+          for (const p of providers) {
+            const models = p.models || p.modelList || [];
+            const walk = (m) => {
+              if (!m || typeof m !== 'object') return;
+              const cw = m.contextWindow || m.context_window || m.contextLength;
+              const id = m.modelId || m.id || m.name;
+              if (cw && id) cache[id] = cw;
+              if (Array.isArray(m.models)) m.models.forEach(walk);
+              else if (m.models && typeof m.models === 'object') Object.values(m.models).forEach(walk);
+            };
+            if (Array.isArray(models)) models.forEach(walk);
+            else if (models && typeof models === 'object') Object.values(models).forEach(walk);
+          }
+        } catch {}
+      }
     }
   } catch {}
   zcodeContextCache = cache;
@@ -112,11 +134,6 @@ export function inferContextWindow(modelId) {
 /** 按模型 id 解析 context window（查不到时用默认 200k） */
 export function contextWindowFor(modelId) {
   return inferContextWindow(modelId) || 200000;
-}
-
-/** 路径拼接（避免在纯工具模块里依赖 node:path 的默认行为不一致，统一用 posix） */
-function pathJoin(dir, f) {
-  return dir.replace(/\/$/, '') + '/' + f;
 }
 
 /* ---------- 文本抽取 ---------- */

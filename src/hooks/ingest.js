@@ -25,38 +25,36 @@ export function projectFromCwd(cwd) {
 
 const router = Router();
 
-// ZCode 官方会话 db 的轻量缓存查询（key: sessionId → { title, directory, permission }）
-// hook payload 缺失 cwd/title/mode 时兜底用；查不到返回 null（不阻塞事件）
-const zcodeMetaCache = new Map();
+// ZCode 官方会话 db 查询（sessionId → { title, directory, mode }）
+// hook payload 缺失 cwd/title/mode 时兜底用；查不到返回 null（不阻塞事件）。
+// 只缓存连接与预编译语句，**不缓存查询结果**——标题是 ZCode 异步生成的
+// （会话首个事件时 db 里往往还是空，几秒后才写入），缓存结果会让空/旧标题永远刷不过来。
 const ZCODE_DB = path.join(homedir(), '.zcode/cli/db/db.sqlite');
-// 复用连接：hook 事件是热路径，避免每次查标题都重新打开 db；失败时置空下次重开
 let zcodeDb = null;
+let zcodeStmt = null;
 function zcodeSessionMeta(sessionId) {
   if (!sessionId) return null;
-  if (zcodeMetaCache.has(sessionId)) return zcodeMetaCache.get(sessionId);
-  let meta = null;
   try {
-    if (!zcodeDb && existsSync(ZCODE_DB)) zcodeDb = new DatabaseSync(ZCODE_DB);
-    if (zcodeDb) {
-      // 参数绑定查询，会话 ID 里的连字符是普通值，不会被当成 SQL 语法
-      const row = zcodeDb.prepare('SELECT title, directory, permission FROM session WHERE id = ?').get(sessionId);
-      const title = row?.title?.trim();
-      const directory = row?.directory?.trim();
-      if (title || directory || row?.permission) {
-        meta = {
-          title: title || null,
-          directory: directory || null,
-          mode: parseZCodePermission(row?.permission),
-        };
-      }
+    if (!zcodeDb && existsSync(ZCODE_DB)) {
+      // 只读打开：与运行中的 ZCode 共存，不加锁不干扰（同 zcode-turns.js）
+      zcodeDb = new DatabaseSync(ZCODE_DB, { readOnly: true });
     }
+    if (!zcodeStmt && zcodeDb) {
+      // 参数绑定查询，会话 ID 里的连字符是普通值，不会被当成 SQL 语法
+      zcodeStmt = zcodeDb.prepare('SELECT title, directory, permission FROM session WHERE id = ?');
+    }
+    if (!zcodeStmt) return null;
+    const row = zcodeStmt.get(sessionId); // 主键查询，开销极小，可每个事件都查
+    const title = row?.title?.trim() || null;
+    const directory = row?.directory?.trim() || null;
+    const mode = parseZCodePermission(row?.permission);
+    if (!title && !directory && !mode) return null;
+    return { title, directory, mode };
   } catch {
     zcodeDb = null; // 连接失效（如 db 被重建/锁定）→ 下次事件重新打开
+    zcodeStmt = null;
+    return null;
   }
-  // 只缓存成功结果；失败不缓存（下次再试）
-  if (meta) zcodeMetaCache.set(sessionId, meta);
-  if (zcodeMetaCache.size > 500) zcodeMetaCache.clear(); // 防膨胀
-  return meta;
 }
 
 /** POST /api/hooks/:provider — 统一 hook 接收入口 */
@@ -107,29 +105,25 @@ export function applyEvent(ev) {
   if (ev.cwd) {
     patch.cwd = ev.cwd;
     if (!s.project) patch.project = projectFromCwd(ev.cwd);
-  } else if (!s.cwd && ev.provider === 'zcode') {
-    // ZCode 部分事件（如 Stop）payload 可能不带 cwd → 从官方 db 回查补齐
-    // （会话创建时若缺 cwd，前端会归到"未知项目"，补上后自动迁移）
+  }
+  // ZCode 元数据对齐（cwd 兜底 / 官方标题 / 权限模式）：每个事件最多查一次 db（主键查询）。
+  // 标题策略：db 官方标题权威且**异步生成**——首个事件时往往还是空，只能先落回退值
+  // （首条 prompt，由下方文件同步补）；等 db 生成后每个事件都跟随对齐，不同则覆盖。
+  // 此前"只补空 + 查询结果永久缓存"导致标题永远停在回退值/空值，hook 触发了也不更新。
+  // 注意：ZCode 的 ev.title 是当次 prompt，不能当标题兜底（每轮都变），db 才是稳定来源。
+  if (ev.provider === 'zcode') {
     const meta = zcodeSessionMeta(ev.sessionId);
-    if (meta?.directory) {
+    // cwd：部分事件（如 Stop）payload 不带 → 从官方 db 回查补齐
+    // （会话创建时若缺 cwd，前端会归到"未知项目"，补上后自动迁移）
+    if (!ev.cwd && meta?.directory) {
       patch.cwd = meta.directory;
       if (!s.project) patch.project = projectFromCwd(meta.directory);
     }
+    if (meta?.title && meta.title !== s.title) patch.title = meta.title;
+    // mode 补齐：hook payload 没带（ZCode hook 通常不带 permission_mode）时从 db 回查
+    if (meta?.mode && !s.mode) patch.mode = meta.mode;
   }
-  // 标题优先级（ZCode）：db 官方标题 > hook payload 标题（对 ZCode 通常是首条 prompt，兜底用）。
-  // db 是用户/模型生成的会话标题（如"Vue库存周期盘点列表"），比 prompt 更稳定；只补空，不覆盖已有。
-  // 注意：ZCode 的 ev.title 就是当次 prompt，绝不能当"官方标题"——db 查询必须优先于它。
-  if (!s.title && ev.provider === 'zcode') {
-    const meta = zcodeSessionMeta(ev.sessionId);
-    if (meta?.title) patch.title = meta.title;
-  }
-  // mode 补齐：hook payload 没带（ZCode/Codex hook 通常不带 permission_mode）时，
-  // ZCode 从 db session.permission（JSON 字符串 {"mode":"..."}）回查，Claude 由文件解析补
-  if (!s.mode && ev.provider === 'zcode') {
-    const meta = zcodeSessionMeta(ev.sessionId);
-    if (meta?.mode) patch.mode = meta.mode;
-  }
-  // 非 ZCode 或 db 无标题时才用 ev.title 兜底（Claude/Codex 的 ev.title 是真实描述；ZCode 是 prompt）
+  // 非 ZCode 才用 ev.title 兜底（Claude/Codex 的 ev.title 是真实描述；ZCode 是 prompt）
   if (ev.title && !s.title && !patch.title && ev.provider !== 'zcode') patch.title = ev.title;
   if (ev.mode) patch.mode = ev.mode;
   if (ev.lastMessage) patch.lastMessage = ev.lastMessage;
@@ -162,8 +156,10 @@ export function applyEvent(ev) {
           if (todo) patch2.todo = todo;
         }
         if (Object.keys(patch2).length) hub.update(sessionId, patch2);
-        // 状态：按最后一条 model_io 的回复状态收敛（AI 回复完成 → idle；有工具调用 → running）
-        if (result.replyState) hub.applyReplyState(sessionId, result.replyState);
+        // 状态：按最后一条 model_io 的回复状态收敛（AI 回复完成 → idle；有工具调用 → running）。
+        // 带上该记录的落盘时间做陈旧守卫——prompt 刚提交时文件尾部仍是上一轮的 done，
+        // 不能让它把刚进入 running 的新一轮打成 idle（详见 hub.applyReplyState）
+        if (result.replyState) hub.applyReplyState(sessionId, result.replyState, { at: result.replyStateAt });
       } catch (err) { console.error('[ingest] file sync error:', err); }
     });
   }

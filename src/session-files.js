@@ -12,7 +12,7 @@
  *     usage: { inputTokens, outputTokens, totalTokens, contextTokens, cacheReadTokens,
  *              maxTokens, sessionTotalTokens?, cacheHitRate, reasoningTokens? },
  *     aiTitle, firstPrompt, lastMessage, cwd, sessionId,
- *     mode, lastActivityAt, replyState,
+ *     mode, lastActivityAt, replyState, replyStateAt,
  *   }
  * 语义约定：
  *  - contextTokens / totalTokens = 当前上下文（最近一次请求），进度条用
@@ -20,6 +20,8 @@
  *  - cacheHitRate 各家分母口径不同，adapter 内已按各自口径算好
  *  - mode 可能来自文件（Claude permission-mode 行）或 db（ZCode permission / Codex approval_mode），
  *    adapter 解析文件时可能给 null，由调用方从 db 补齐
+ *  - replyState / replyStateAt = 最后一条可判定记录的回复结论及其落盘时间；
+ *    at 供 hub.applyReplyState 做陈旧守卫（早于最近对话活动的结论描述的是上一轮，不采纳）
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';

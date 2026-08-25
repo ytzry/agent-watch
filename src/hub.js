@@ -121,11 +121,17 @@ class Hub extends EventEmitter {
    * 询问/审批/错误/后台任务等主动状态一律不覆盖（它们是 hook 事件的权威结论）。
    * 真等待（waitingForInput=true，AskUserQuestion 提问后）不会被文件信号覆盖——
    * 文件无法表达"模型在等用户"，只有 hook 的 ask_user 事件能标这个状态。
+   *
+   * @param {object} [opts.at] 该回复结论对应记录的落盘时间（adapter 从记录时间戳解析）。
+   *   陈旧守卫：记录早于最近一次对话活动（如刚提交的新 prompt）→ 它描述的是上一轮，
+   *   不能覆盖 hook 刚下的结论——否则新提问会被上一轮遗留的 done 立刻打成 idle（已完成），
+   *   且后续 running 又刻意不打断 idle，整轮都会卡在"已完成"。
    */
-  applyReplyState(sessionId, replyState) {
+  applyReplyState(sessionId, replyState, { at } = {}) {
     if (!replyState) return;
     const s = this.sessions.get(sessionId);
     if (!s || s.state === STATES.ENDED) return;
+    if (at && s.lastActivityAt > at) return;
     if (replyState === 'done') {
       // 回复完成：created/running → idle；兜底等待（非 ask）→ idle；真等待/审批/错误等保持
       if (s.state === STATES.CREATED || s.state === STATES.RUNNING ||

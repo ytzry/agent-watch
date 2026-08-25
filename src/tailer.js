@@ -49,8 +49,10 @@ export function watchSessionFile(sessionId, provider, cwd) {
     if (result.lastMessage) patch.lastMessage = result.lastMessage;
     if (Object.keys(patch).length) hub.update(sessionId, patch);
     // 状态：按最后一条 model_io 的回复状态收敛（AI 回复完成 → idle；有工具调用 → running）。
-    // 只在 running/waiting_input 间切换，不覆盖询问/审批/错误等主动状态
-    if (result.replyState) hub.applyReplyState(sessionId, result.replyState);
+    // 只在 running/waiting_input 间切换，不覆盖询问/审批/错误等主动状态。
+    // 带记录时间戳做陈旧守卫：新 prompt 提交后、新记录落盘前，尾部还是上一轮的 done，
+    // 轮询不能把它当成"本轮完成"（详见 hub.applyReplyState）
+    if (result.replyState) hub.applyReplyState(sessionId, result.replyState, { at: result.replyStateAt });
   };
 
   // 初始解析一次 + 监听文件变化

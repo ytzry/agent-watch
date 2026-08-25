@@ -28,6 +28,12 @@ import { statSync } from 'node:fs';
 
 const ASK_TOOLS = new Set(['AskUserQuestion', 'ask_user', 'ask']);
 
+/** 记录时间戳归一化：epoch 毫秒数或 ISO 字符串 → ms；无效返回 0 */
+function parseTs(v) {
+  const t = typeof v === 'number' ? v : Date.parse(v);
+  return Number.isFinite(t) ? t : 0;
+}
+
 function normalizeMode(raw) {
   // ZCode 权限模式可能以字符串出现在 payload；未知则保留原值
   if (!raw) return null;
@@ -74,6 +80,9 @@ function extractTitle(payload) {
  *    （无 maxTokens/contextTokens → 用 model catalog 推断）
  *  - response.text 是本次回复文本（lastMessage 来源，比滚动解析更准）
  *  - 回复状态：finishReason==='stop' 且无 toolCalls → done；有 toolCalls → running
+ *    同时记下该记录的 startedAt（replyStateAt），供 hub 做陈旧守卫：
+ *    新一轮 prompt 提交后、新记录落盘前，文件里最后一条仍是上一轮的 done，
+ *    没有时间戳就无法分辨"真完成"和"上一轮遗留"，会把刚提问的会话误打成已完成
  */
 export function parseRollout(filePath) {
   const body = readFileTail(filePath, 512 * 1024);
@@ -82,6 +91,7 @@ export function parseRollout(filePath) {
   let modelId = '';
   let firstPrompt = '';
   let replyState = null;
+  let replyStateAt = 0;
   let lastText = '';
   let sessionId = '';
   let lastTs = 0;
@@ -104,6 +114,7 @@ export function parseRollout(filePath) {
           } else if (obj.response.toolCalls.length > 0) {
             replyState = 'running';
           }
+          if (replyState) replyStateAt = parseTs(obj.startedAt) || replyStateAt;
         }
         // 最后回复文本（response.text 是该次回复）
         if (obj.response.text && typeof obj.response.text === 'string') {
@@ -128,8 +139,8 @@ export function parseRollout(filePath) {
       }
       // 最后一条有内容的记录时间（活跃判定/排序）
       if (obj.startedAt) {
-        const t = typeof obj.startedAt === 'number' ? obj.startedAt : Date.parse(obj.startedAt);
-        if (!isNaN(t) && t > lastTs) lastTs = t;
+        const t = parseTs(obj.startedAt);
+        if (t > lastTs) lastTs = t;
       }
     } catch {}
   }
@@ -152,7 +163,7 @@ export function parseRollout(filePath) {
     cacheHitRate: hitDenom > 0 ? sumCacheRead / hitDenom : null,
   } : null;
   if (!usage && !firstPrompt && !replyState && !lastText && !sessionId) return null;
-  return { usage, firstPrompt: firstPrompt || null, lastMessage: lastText || null, sessionId, replyState, lastActivityAt: lastTs };
+  return { usage, firstPrompt: firstPrompt || null, lastMessage: lastText || null, sessionId, replyState, replyStateAt, lastActivityAt: lastTs };
 }
 
 /** 从 request.body（JSON 字符串或对象）的 messages 里提取首条真实用户输入（标题兜底）。
@@ -205,6 +216,7 @@ const adapter = {
       mode: null, // 由 db session.permission 提供
       lastActivityAt: r.lastActivityAt || 0,
       replyState: r.replyState || null,
+      replyStateAt: r.replyStateAt || 0,
     };
   },
 
