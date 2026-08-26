@@ -7,9 +7,14 @@
  *  - ZCode:       ~/.zcode/cli/config.json       hooks: { enabled:true, events: { "<Event>": [...] } }
  *
  * 用法：npm run hooks:install [-- --provider claude-code|codex|zcode]
- * 不传 provider 则全部安装。先备份原文件为 .agent-watch.bak。
+ * 不传 provider 则全部安装。安装前先把原文件**复制**一份到 ~/.agent-watch-backups/
+ * （原件必须留在原地），然后只合并写入本工具自己的键，不碰配置里的其它内容。
+ *
+ * 为什么备份必须用 copy 而不是 rename：rename 会把原路径搬空，下面的
+ * JSON.parse(readFileSync(file)) 读到的永远是"文件不存在"，于是从 {} 重写，
+ * 用户手工加的 mcp.servers / plugins 等全部被抹掉（已实际造成过 MCP 丢失）。
  */
-import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { config } from '../src/config.js';
@@ -27,7 +32,7 @@ function backup(filePath) {
   if (!existsSync(filePath)) return;
   mkdirSync(BACKUP_DIR, { recursive: true });
   const name = path.basename(filePath) + '.' + Date.now() + '.bak';
-  renameSync(filePath, path.join(BACKUP_DIR, name));
+  copyFileSync(filePath, path.join(BACKUP_DIR, name));
   console.log(`  已备份 ${filePath} → ${BACKUP_DIR}/${name}`);
 }
 
