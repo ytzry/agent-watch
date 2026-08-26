@@ -15,7 +15,7 @@
  */
 import {
   EVENTS, getSessionId, getCwd, getToolInput, getToolName,
-  getLastAssistantMessage, getPermissionMode,
+  getLastAssistantMessage, getPermissionMode, getModel,
 } from '../common.js';
 import { readFileTail, contextWindowFor } from '../../session-utils.js';
 
@@ -210,6 +210,7 @@ const adapter = {
     const toolInput = getToolInput(payload);
     const mode = normalizeMode(getPermissionMode(payload));
     const lastMessage = getLastAssistantMessage(payload) || payload.message;
+    const model = getModel(payload); // 官方 hook payload 不带 model，防御性提取（CCR 等代理可能注入）
     // Notification → 需要输入信号
     if (rawEventName === 'Notification') {
       const type = payload.notificationType || payload.notification_type || '';
@@ -220,6 +221,7 @@ const adapter = {
           event: EVENTS.ASK_USER,
           title: payload.message || payload.title,
           cwd,
+          model,
         };
       }
       return null;
@@ -237,6 +239,7 @@ const adapter = {
         title: toolInput?.description || toolInput?.command,
         cwd,
         mode,
+        model,
       };
     }
 
@@ -255,6 +258,7 @@ const adapter = {
         '',
       cwd,
       mode,
+      model,
       lastMessage,
     };
 

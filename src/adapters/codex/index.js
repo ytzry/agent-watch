@@ -19,7 +19,7 @@
  */
 import {
   EVENTS, getSessionId, getCwd, getToolInput, getToolName,
-  getLastAssistantMessage, getPermissionMode, getToolResponse,
+  getLastAssistantMessage, getPermissionMode, getToolResponse, getModel,
 } from '../common.js';
 import { readFileTail } from '../../session-utils.js';
 
@@ -183,6 +183,7 @@ const adapter = {
     const toolResponse = getToolResponse(payload);
     const mode = normalizeMode(getPermissionMode(payload));
     const lastMessage = getLastAssistantMessage(payload);
+    const model = getModel(payload); // SessionStart payload 顶层带 model（codex-rs hooks schema）
     if (rawEventName === 'PermissionRequest') {
       const isAsk = /request_user_input|ask_user|ask/i.test(toolName);
       return {
@@ -194,6 +195,7 @@ const adapter = {
         title: toolInput?.description || toolInput?.command,
         cwd,
         mode,
+        model,
       };
     }
 
@@ -212,6 +214,7 @@ const adapter = {
         '',
       cwd,
       mode,
+      model,
       lastMessage,
     };
 

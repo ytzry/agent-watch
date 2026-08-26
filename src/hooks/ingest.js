@@ -25,13 +25,14 @@ export function projectFromCwd(cwd) {
 
 const router = Router();
 
-// ZCode 官方会话 db 查询（sessionId → { title, directory, mode }）
-// hook payload 缺失 cwd/title/mode 时兜底用；查不到返回 null（不阻塞事件）。
+// ZCode 官方会话 db 查询（sessionId → { title, directory, mode, model }）
+// hook payload 缺失 cwd/title/mode/model 时兜底用；查不到返回 null（不阻塞事件）。
 // 只缓存连接与预编译语句，**不缓存查询结果**——标题是 ZCode 异步生成的
 // （会话首个事件时 db 里往往还是空，几秒后才写入），缓存结果会让空/旧标题永远刷不过来。
 const ZCODE_DB = path.join(homedir(), '.zcode/cli/db/db.sqlite');
 let zcodeDb = null;
 let zcodeStmt = null;
+let zcodeModelStmt = null;
 function zcodeSessionMeta(sessionId) {
   if (!sessionId) return null;
   try {
@@ -43,16 +44,23 @@ function zcodeSessionMeta(sessionId) {
       // 参数绑定查询，会话 ID 里的连字符是普通值，不会被当成 SQL 语法
       zcodeStmt = zcodeDb.prepare('SELECT title, directory, permission FROM session WHERE id = ?');
     }
+    if (!zcodeModelStmt && zcodeDb) {
+      // 会话当前模型 = 最近一次模型请求的 model_id（session 表无 model 列；中途换模型以最新行为准）
+      zcodeModelStmt = zcodeDb.prepare('SELECT model_id FROM model_usage WHERE session_id = ? ORDER BY rowid DESC LIMIT 1');
+    }
     if (!zcodeStmt) return null;
     const row = zcodeStmt.get(sessionId); // 主键查询，开销极小，可每个事件都查
     const title = row?.title?.trim() || null;
     const directory = row?.directory?.trim() || null;
     const mode = parseZCodePermission(row?.permission);
-    if (!title && !directory && !mode) return null;
-    return { title, directory, mode };
+    const modelRow = zcodeModelStmt ? zcodeModelStmt.get(sessionId) : null;
+    const model = modelRow?.model_id || null;
+    if (!title && !directory && !mode && !model) return null;
+    return { title, directory, mode, model };
   } catch {
     zcodeDb = null; // 连接失效（如 db 被重建/锁定）→ 下次事件重新打开
     zcodeStmt = null;
+    zcodeModelStmt = null;
     return null;
   }
 }
@@ -106,6 +114,9 @@ export function applyEvent(ev) {
     patch.cwd = ev.cwd;
     if (!s.project) patch.project = projectFromCwd(ev.cwd);
   }
+  // 模型名：hook payload 带了就是最新事实（Codex SessionStart 顶层 model）→ 覆盖旧值。
+  // 不能只补空——会话中途切换模型时，文件同步的"只补空"守卫（下方 patch2）永远刷不过来
+  if (ev.model && ev.model !== s.model) patch.model = ev.model;
   // ZCode 元数据对齐（cwd 兜底 / 官方标题 / 权限模式）：每个事件最多查一次 db（主键查询）。
   // 标题策略：db 官方标题权威且**异步生成**——首个事件时往往还是空，只能先落回退值
   // （首条 prompt，由下方文件同步补）；等 db 生成后每个事件都跟随对齐，不同则覆盖。
@@ -122,6 +133,9 @@ export function applyEvent(ev) {
     if (meta?.title && meta.title !== s.title) patch.title = meta.title;
     // mode 补齐：hook payload 没带（ZCode hook 通常不带 permission_mode）时从 db 回查
     if (meta?.mode && !s.mode) patch.mode = meta.mode;
+    // model 兜底：ZCode hook payload 不带模型名，从官方 db 最近一次 model_usage 回查当前模型。
+    // 覆盖式对比更新——中途换模型时 db 最新行就是新模型，旧值必须能刷掉
+    if (!ev.model && meta?.model && meta.model !== s.model) patch.model = meta.model;
   }
   // 非 ZCode 才用 ev.title 兜底（Claude/Codex 的 ev.title 是真实描述；ZCode 是 prompt）
   if (ev.title && !s.title && !patch.title && ev.provider !== 'zcode') patch.title = ev.title;

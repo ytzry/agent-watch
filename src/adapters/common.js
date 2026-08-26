@@ -21,6 +21,7 @@
  * @property {string} [lastMessage]     最后助手消息
  * @property {boolean} [hasBackground]  是否有后台任务/定时器
  * @property {string} [reason]          结束/错误原因
+ * @property {string} [model]           会话当前使用的模型名（hook payload 带了才有；ZCode 无，由 ingest 从官方 db 回查）
  */
 
 export const EVENTS = {
@@ -76,4 +77,13 @@ export function getLastAssistantMessage(payload) {
 
 export function getPermissionMode(payload) {
   return pick(payload, 'permission_mode', 'permissionMode');
+}
+
+/** 会话当前模型名（hook payload 顶层 model / modelId；'<synthetic>' 等占位值不算真实模型）。
+ *  实测只有 Codex SessionStart payload 带 model（codex-rs hooks schema）；Claude/ZCode 不带 → undefined，
+ *  由 ingest 从会话文件/官方 db 兜底。 */
+export function getModel(payload) {
+  const m = payload?.model ?? payload?.modelId;
+  if (!m || typeof m !== 'string' || m.startsWith('<')) return undefined;
+  return m;
 }

@@ -21,7 +21,7 @@
  */
 import {
   EVENTS, getSessionId, getCwd, getToolInput, getToolName,
-  getLastAssistantMessage, getPermissionMode,
+  getLastAssistantMessage, getPermissionMode, getModel,
 } from '../common.js';
 import { readFileTail, contextWindowFor } from '../../session-utils.js';
 import { statSync } from 'node:fs';
@@ -227,6 +227,7 @@ const adapter = {
     const toolName = getToolName(payload);
     const toolInput = getToolInput(payload);
     const mode = normalizeMode(getPermissionMode(payload) || payload.mode);
+    const model = getModel(payload); // hook payload 不带模型名，防御性提取；实际由 ingest 从官方 db 回查
     const ev = eventMap[rawEventName];
     if (rawEventName === 'PermissionRequest') {
       const isAsk = ASK_TOOLS.has(toolName);
@@ -239,6 +240,7 @@ const adapter = {
         title: extractTitle(payload),
         cwd,
         mode,
+        model,
       };
     }
     if (!ev) return null;
@@ -250,6 +252,7 @@ const adapter = {
       title: extractTitle(payload),
       cwd,
       mode,
+      model,
       lastMessage: getLastAssistantMessage(payload) || payload.message,
     };
 
