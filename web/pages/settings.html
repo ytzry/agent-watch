@@ -303,6 +303,14 @@
       scrollbar-width: thin; /* Firefox */
       scrollbar-color: hsl(var(--border)) transparent;
     }
+    /* ===== 强制横屏（从首页全屏横屏状态进入时由 JS 同步）：与 home 一致必须固定定位，
+       否则 applyRotate 写入的 left/top 不生效，rotate(90deg) 会把整页转到视口外（黑屏）===== */
+    :host([data-force-landscape]) {
+      position: fixed;
+      margin: 0;
+      display: block;
+      overflow: hidden;
+    }
   </style>
 
   <div class="page">
