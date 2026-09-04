@@ -89,6 +89,7 @@ export function parseRollout(filePath) {
   const lines = body.split('\n').filter(Boolean);
   let last = null;
   let modelId = '';
+  let modelProviderId = '';
   let firstPrompt = '';
   let replyState = null;
   let replyStateAt = 0;
@@ -125,8 +126,13 @@ export function parseRollout(filePath) {
       const u = obj.usage || obj.response?.usage;
       // 取最后一条"有实际上下文"的 usage（跳过空记录）
       if (u && (u.inputTokens ?? 0) >= 500) last = u;
-      // 模型 id（从 model.modelId 读）
-      if (!modelId && obj.model?.modelId) modelId = obj.model.modelId;
+      // 模型 id（从 model.modelId 读）+ providerId（用户在 ZCode 里给模型配的窗口按
+      // providerId+modelId 存在 v2 config，缺了 providerId 只能按模型名退回）。
+      // 取最后一条（跟随最近一次请求）：中途换模型时，usage 也是最后一条，两者要对上
+      if (obj.model?.modelId) {
+        modelId = obj.model.modelId;
+        modelProviderId = obj.model.providerId || modelProviderId;
+      }
       // 首条真实 user prompt（标题兜底；文件超出读窗时取不到，留给 db 兜底）
       if (!firstPrompt && wholeFileInWindow) firstPrompt = firstUserPromptFromBody(obj.request?.body);
       // 缓存命中率：累计最近所有请求（只算有实际 token 的）。
@@ -144,8 +150,8 @@ export function parseRollout(filePath) {
       }
     } catch {}
   }
-  // 上下文窗口：优先从官方 model catalog 查（deepseek-v4-flash = 1000000），再按模型名推断
-  const ctxWindow = contextWindowFor(modelId);
+  // 上下文窗口：用户 v2 config（含 catalog 没有的第一方/自添加模型）→ 官方 model catalog → 模型名推断
+  const ctxWindow = contextWindowFor(modelId, modelProviderId);
   // 命中率分母 = 总输入（inputTokens 已含缓存读取）。cacheCreate 另计为新增写入，
   // 不计入命中率分母（它属于"本次写入、下次才读"的冷启动成本）。
   const hitDenom = sumInput + sumCacheCreate;

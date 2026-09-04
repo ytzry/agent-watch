@@ -13,7 +13,7 @@
   - **子代理运行计数**（ZCode 读官方 db turn_usage，Claude/Codex 走 SubagentStart/Stop hook）
   - 最后工具名
   - todo 待办列表（从 `TodoWrite` / `update_plan` 工具解析）
-  - 上下文使用进度条（从 rollout / transcript 文件 tail 解析 token 用量；容量从模型 catalog 精确读取）
+  - 上下文使用进度条（从 rollout / transcript 文件 tail 解析 token 用量；容量按 用户模型配置（`~/.zcode/v2/config.json` 的 limit.context，含第一方/自添加模型）→ 安装目录 model catalog（Windows 从注册表解析安装路径）→ 模型名已知表 的顺序读取，兜底 200k）
   - 最后消息摘要
 - **声音播报**：提醒音 / 语音播报两种模式
   - **提醒音**（Web Audio 合成）：内置 6 种提示音，每状态可独立开关 + 选音
